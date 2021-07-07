@@ -47,8 +47,8 @@ def main():
     parser.add_argument("--val_list", default="voc12/val.txt", type=str)
     parser.add_argument("--LISTpath", default="voc12/train_aug(id).txt", type=str)
 
-    parser.add_argument('--crf_la_value', type=int, default=4)
-    parser.add_argument('--crf_ha_value', type=int, default=32)
+    # parser.add_argument('--crf_la_value', type=int, default=4)
+    # parser.add_argument('--crf_ha_value', type=int, default=32)
 
     parser.add_argument('--densecrfloss', type=float, default=1e-7,
                         metavar='M', help='densecrf loss (default: 0)')

@@ -9,7 +9,7 @@ import os
 import matplotlib.pyplot as plt
 import PIL.Image
 import math
-
+    
 
 classes = ['aeroplane',
            'bicycle',
