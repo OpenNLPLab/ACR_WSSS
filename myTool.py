@@ -145,8 +145,8 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, sal
 
     output = cls_pred.detach().cpu()
     accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
-    # if accuracy < 1:
-    #    return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+    if accuracy < 1:
+       return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
 
     _, h, w = norm_cam.shape
     
@@ -228,25 +228,6 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
     
-    high_conf = np.sum((norm_cam>cut_threshold), axis=0)
-    conflict_area = (high_conf > 1)
-
-    # bg_score = np.power(1 - np.max(cam_np, 0), 32)
-    # bg_score = np.expand_dims(bg_score, axis=0)
-    # cam_all = np.concatenate((bg_score, cam_np))
-    
-    # crf_label = np.argmax(cam_all, 0)
-    # crf_label[crf_label==0] =255
-
-    crf_label = np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
-    for class_i in range(20):
-        if cam_label[class_i] > 1e-5 and cls_pred[class_i] > 0.001:
-            cam_class = norm_cam[class_i, :,:]
-            crf_label[cam_class>cut_threshold] = class_i+1
-    
-    crf_label[conflict_area] = 255
-    crf_label[saliency == 0] = 0
-
     # save heatmap
     if save_heatmap:
         img = ori_img
@@ -256,11 +237,85 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
             heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
             img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
             cam_output = heatmap * 0.5 + img * 0.5
-
             cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
-    
 
-    return crf_label
+    output = cls_pred.detach().cpu()
+    accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
+    # if accuracy < 1:
+    #    return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+
+    _, h, w = norm_cam.shape
+    
+    # if np.sum(cam_label)<2: # one class simple image
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+
+    bkg_high_conf_area = np.zeros([h, w], dtype=bool)
+
+    crf_label = np.argmax(cam_all, 0)
+    crf_label[crf_label ==0 ] = 255
+    crf_label[saliency == 0 ] = 0
+    for class_i in range(20):
+        if cam_label[class_i] > 1e-5:
+            cam_class = norm_cam[class_i, :,:]
+            cam_class_order = cam_class[cam_class > 0]
+            cam_class_order = np.sort(cam_class_order)
+            confidence_pos = int(cam_class_order.shape[0] * 0.95)
+            confidence_value = cam_class_order[confidence_pos]
+
+            bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
+            crf_label[bkg_high_conf_cls] = class_i+1
+            saliency[bkg_high_conf_cls] = 255
+            bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
+            crf_label[bkg_high_conf_conflict] = 255
+
+            bkg_high_conf_area[bkg_high_conf_cls] = 1
+
+            # unsure_bkg = np.logical_and((cam_class>confidence_value), (crf_label==0))
+            # crf_label[unsure_bkg] = 255
+
+    # else: # multi class hard image
+    #     high_conf = np.zeros([20, h, w], dtype=bool)
+    #     crf_label = np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+
+    #     for class_i in range(20):
+    #         if cam_label[class_i] > 1e-5 and cls_pred[class_i] > 0.001:
+    #             cam_class = norm_cam[class_i, :,:]
+    #             cam_class_order = cam_class[cam_class > 0]
+    #             cam_class_order = np.sort(cam_class_order)
+    #             confidence_pos = int(cam_class_order.shape[0] * 0.8)
+    #             confidence_value = cam_class_order[confidence_pos]
+
+    #             high_conf[class_i] = (cam_class>confidence_value)
+
+    #             crf_label[cam_class>confidence_value] = class_i+1
+ 
+    #     high_conf = np.sum(high_conf, axis=0)
+    #     high_conf_area = (high_conf>0)
+    #     conflict_area = (high_conf > 1)
+    #     good_high_conf_area = (high_conf == 1)
+    #     good_low_conf_area = (high_conf == 0)
+        
+    #     # crf_label[good_low_conf_area] = 0
+
+    #     crf_label[conflict_area] = 255
+
+    #     sure_bkg = np.logical_and((saliency==0), (high_conf==0))
+    #     crf_label[sure_bkg] = 0
+    #     unsure_bkg = np.logical_and((saliency==0), (high_conf>0))
+    #     crf_label[unsure_bkg] = 255
+    #     # crf_label[saliency == 0] = 0
+
+    # cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/seg_label/', name + '.png'), crf_label)
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_{}.png'.format(name, accuracy),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
+
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/{}_{}.png'.format(name, accuracy),
+                        (saliency).astype('uint8'))
+    
+    return crf_label, saliency
 
 
 def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,saliency, cls_pred, save_heatmap=False):

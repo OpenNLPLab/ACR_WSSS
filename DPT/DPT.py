@@ -209,7 +209,6 @@ class DPT(BaseModel):
         self.cls_head = nn.Linear(768, self.num_class)
 
     def forward(self, x):
-        # x = torch.Size([1, 3, 384, 672])
         raw_x = x
         x_size = x.size()
         if self.channels_last == True:
@@ -244,12 +243,12 @@ class DPT(BaseModel):
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
+        layer_1, layer_2, layer_3, layer_4, _, _ = forward_vit(self.pretrained, x)
 
-        # x_cls = layer_4.clone()
-        # x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
-        # x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
-        x_cls = self.cls_head(x_cls)
+        x_cls = layer_4.clone()
+        x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
+        x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+        # x_cls = self.cls_head(x_cls)
 
         return x_cls
 
