@@ -53,15 +53,15 @@ if __name__ == '__main__':
     parser.add_argument("--out_cam_pred", default='./output/result/no_crf', type=str)
     parser.add_argument("--out_la_crf", default='./output/result/crf', type=str)
     parser.add_argument("--out_color", default='./output/result/color', type=str)
-    parser.add_argument("--LISTpath", default="./voc12/test.txt", type=str)
-    parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages2", type=str)
+    parser.add_argument("--LISTpath", default="./voc12/val(id).txt", type=str)
+    parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
     parser.add_argument("--val", default=False, type=bool)
 
     args = parser.parse_args()
 
     model = DPTSegmentationModel(num_classes=20)
     # weights_dict = torch.load('weight/vit_cls_seg_12.pth')
-    weights_dict = torch.load('weight/train_from_init_7.pth')
+    weights_dict = torch.load('weight/train_from_init_8.pth')
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()
@@ -74,13 +74,12 @@ if __name__ == '__main__':
     # img_list = ['2007_000464 ']
     for index, i in enumerate(img_list):
         print(index)
-        i = ((i.split('/'))[2])[0:-4]
+        # i = ((i.split('/'))[2])[0:-4]
 
         print(i)
 
         print(os.path.join(im_path, i[:-1] + '.jpg'))
         img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))
-        # print(args.val)
         if args.val==True:
             target_path = os.path.join('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/SegmentationClassAug', '{}.png'.format(i[:-1]))
             target = np.asarray(Image.open(target_path), dtype=np.int32)
@@ -110,7 +109,7 @@ if __name__ == '__main__':
 
         input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
-        _, output = model(input)
+        _, output= model(input)
 
         # output = output[]
         # print(output.shape)
@@ -138,6 +137,8 @@ if __name__ == '__main__':
             # print(np.unique(crf_img))
             if args.val:
                 evaluator.add_batch(target, crf_img)
+                # Acc = evaluator.Pixel_Accuracy()
+            # print(Acc)
 
             imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
 

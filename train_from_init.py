@@ -154,14 +154,12 @@ def train(gpu, args):
 
     timer = pyutils.Timer("Session started: ")
 
-    TRAIN_CLS_FLAG = True
-
     cls_loss_list = []
     seg_loss_list = []
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
-        if (optimizer.global_step-1) > args.cls_step * max_step:
+        if (optimizer.global_step-1) < args.cls_step * max_step:
             img, ori_images, label, croppings, name_list = mytool.get_data_from_chunk_v2(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
@@ -199,6 +197,8 @@ def train(gpu, args):
             torch.distributed.barrier()
         
         else:
+            torch.distributed.barrier()
+
             optimizer.lr_scale = args.seg_lr_scale
             img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_v3(chunk, args)
             img = img.cuda(non_blocking=True)

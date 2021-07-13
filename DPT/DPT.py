@@ -162,7 +162,7 @@ class DPT(BaseModel):
         self,
         head,
         features=256,
-        backbone='vitb_rn50_384',
+        backbone='vitb16_384',
         readout="project",
         channels_last=False,
         use_bn=False,
