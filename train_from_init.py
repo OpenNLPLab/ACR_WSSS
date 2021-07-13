@@ -44,7 +44,7 @@ def main():
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
     parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
-    parser.add_argument("--val_list", default="voc12/val.txt", type=str)
+    parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
     parser.add_argument("--LISTpath", default="voc12/train_aug(id).txt", type=str)
 
     # parser.add_argument('--crf_la_value', type=int, default=4)
@@ -156,6 +156,7 @@ def train(gpu, args):
 
     cls_loss_list = []
     seg_loss_list = []
+    seg_val_loss_list = []
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
@@ -303,7 +304,46 @@ def train(gpu, args):
                     'Fin:%s' % (timer.str_est_finish()),
                     'lr: %.4f' % (optimizer.param_groups[0]['lr']), flush=True)
             torch.distributed.barrier()
-    torch.distributed.barrier()
+        
+            # validation
+            if (optimizer.global_step-1)%3000 == 0:
+                val_loss_list = []
+                torch.distributed.barrier()
+                model.eval()
+                with torch.no_grad():
+                    val_img_list = mytool.read_file(args.val_list)
+                    val_data_gen = mytool.chunker(val_img_list, size=1)
+                    # print(len(val_img_list))
+                    for val_iter in range(len(val_img_list)):
+                        chunk = val_data_gen.__next__()
+                        # print(len(chunk))
+                        img, ori_images, label, croppings, name_list, target = mytool.get_data_from_chunk_v4(chunk, args)
+                        img = img.cuda(non_blocking=True)
+                        label = label.cuda(non_blocking=True)
+                        target = target.numpy()
+                        # target = target.cuda(non_blocking=True)
+                        x, seg  = model(img)
+
+                        celoss, dloss = compute_joint_loss(ori_images, seg, target, croppings, \
+                        critersion,DenseEnergyLosslayer)
+                        closs = F.multilabel_soft_margin_loss(x, label) 
+                        val_loss =  closs + celoss + dloss #+ sal_loss
+                        # print(val_iter, val_loss, name_list)  
+                        val_loss_list.append(val_loss.cpu().numpy())
+                        # print(val_loss.cpu().numpy()) 
+                        torch.distributed.barrier()
+
+                seg_val_loss_list.append(sum(val_loss_list)/len(val_loss_list))
+                # print(seg_val_loss_list)
+
+                if gpu==0:
+                    vis.line(seg_val_loss_list,\
+                    win='train_from_init_seg_val_{}'.format(args.session_name),
+                    opts=dict(title='train_from_init_seg_val_{}'.format(args.session_name)))
+
+            model.train()
+
+        torch.distributed.barrier()
     torch.distributed.destroy_process_group()
 
     if gpu==0:

@@ -786,7 +786,7 @@ def get_data_from_chunk_v3(chunk, args):
     return images, ori_images, labels, croppings, name_list, saliency
 
 
-# get both target map and image
+# get both target map and image for validation
 def get_data_from_chunk_v4(chunk, args):
     img_path = args.IMpath
 
@@ -813,7 +813,8 @@ def get_data_from_chunk_v4(chunk, args):
         target_map = np.asarray(target_map)
         # print(target_map.shape)
         # img_temp = scale_im(img_temp, scale)
-        img_temp, target_map = RandomResizeLong2(img_temp, target_map, int(dim*0.9), int(dim/0.875))
+        # target_map = scale_im(target_map, scale)
+        img_temp, target_map = RandomResizeLong2(img_temp, target_map, int(dim), int(dim))
 
         img_temp, target_map = flip2(img_temp,target_map, flip_p)
 
