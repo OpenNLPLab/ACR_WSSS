@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
     model = DPTSegmentationModel(num_classes=20)
     # weights_dict = torch.load('weight/vit_cls_seg_12.pth')
-    weights_dict = torch.load('weight/train_from_init_8.pth')
+    weights_dict = torch.load('weight/train_from_init_14.pth')
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()

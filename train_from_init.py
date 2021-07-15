@@ -14,7 +14,7 @@ import cv2
 from DPT.DPT import DPTSegmentationModel
 
 import myTool as mytool
-from myTool import compute_joint_loss, compute_seg_label_2, compute_cam_up, decode_segmap
+from myTool import compute_joint_loss, compute_seg_label_2, compute_cam_up, decode_segmap, validation
 from DenseEnergyLoss import DenseEnergyLoss
 import shutil
 # import pamr
@@ -22,6 +22,8 @@ from pamr import PAMR
 import random
 import torch.multiprocessing as mp
 import torch.distributed as dist
+from tool.metrics import Evaluator
+
 
 
 
@@ -160,7 +162,7 @@ def train(gpu, args):
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
-        if (optimizer.global_step-1) < args.cls_step * max_step:
+        if (optimizer.global_step-1) > args.cls_step * max_step:
             img, ori_images, label, croppings, name_list = mytool.get_data_from_chunk_v2(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
@@ -306,35 +308,40 @@ def train(gpu, args):
             torch.distributed.barrier()
         
             # validation
-            if (optimizer.global_step-1)%3000 == 0:
-                val_loss_list = []
+            if (optimizer.global_step-1)%20 == 0:
+                print('validating....')
                 torch.distributed.barrier()
                 model.eval()
-                with torch.no_grad():
-                    val_img_list = mytool.read_file(args.val_list)
-                    val_data_gen = mytool.chunker(val_img_list, size=1)
-                    # print(len(val_img_list))
-                    for val_iter in range(len(val_img_list)):
-                        chunk = val_data_gen.__next__()
-                        # print(len(chunk))
-                        img, ori_images, label, croppings, name_list, target = mytool.get_data_from_chunk_v4(chunk, args)
-                        img = img.cuda(non_blocking=True)
-                        label = label.cuda(non_blocking=True)
-                        target = target.numpy()
-                        # target = target.cuda(non_blocking=True)
-                        x, seg  = model(img)
+                miou = validation(model)
+                seg_val_loss_list.append(miou)
+                
+                # val_loss_list = []
+                # torch.distributed.barrier()
+                # model.eval()
+                # with torch.no_grad():
+                #     val_img_list = mytool.read_file(args.val_list)
+                #     val_data_gen = mytool.chunker(val_img_list, size=1)
+                #     # print(len(val_img_list))
+                #     for val_iter in range(len(val_img_list)):
+                #         chunk = val_data_gen.__next__()
+                #         img, ori_images, label, croppings, name_list, target = mytool.get_data_from_chunk_v4(chunk, args)
+                #         img = img.cuda(non_blocking=True)
+                #         label = label.cuda(non_blocking=True)
+                #         target = target.numpy()
+                #         # target = target.cuda(non_blocking=True)
+                #         x, seg  = model(img)
 
-                        celoss, dloss = compute_joint_loss(ori_images, seg, target, croppings, \
-                        critersion,DenseEnergyLosslayer)
-                        closs = F.multilabel_soft_margin_loss(x, label) 
-                        val_loss =  closs + celoss + dloss #+ sal_loss
-                        # print(val_iter, val_loss, name_list)  
-                        val_loss_list.append(val_loss.cpu().numpy())
-                        # print(val_loss.cpu().numpy()) 
-                        torch.distributed.barrier()
+                #         celoss, dloss = compute_joint_loss(ori_images, seg, target, croppings, \
+                #         critersion,DenseEnergyLosslayer)
+                #         closs = F.multilabel_soft_margin_loss(x, label) 
+                #         val_loss =  closs + celoss + dloss #+ sal_loss
+                #         # print(val_iter, val_loss, name_list)  
+                #         val_loss_list.append(val_loss.cpu().numpy())
+                #         # print(val_loss.cpu().numpy()) 
+                #         torch.distributed.barrier()
 
-                seg_val_loss_list.append(sum(val_loss_list)/len(val_loss_list))
-                # print(seg_val_loss_list)
+                # seg_val_loss_list.append((sum(val_loss_list)/len(val_loss_list))[0])
+                print(seg_val_loss_list)
 
                 if gpu==0:
                     vis.line(seg_val_loss_list,\

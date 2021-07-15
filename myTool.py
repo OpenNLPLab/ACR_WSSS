@@ -145,8 +145,8 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, sal
 
     output = cls_pred.detach().cpu()
     accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
-    if accuracy < 1:
-       return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+    # if accuracy < 1:
+    #    return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
 
     _, h, w = norm_cam.shape
     
@@ -166,14 +166,15 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, sal
             cam_class_order = cam_class[cam_class > 0]
             cam_class_order = np.sort(cam_class_order)
             confidence_pos = int(cam_class_order.shape[0] * 0.95)
-            confidence_value = cam_class_order[confidence_pos]
+            if confidence_pos>0:
+                confidence_value = cam_class_order[confidence_pos]
 
-            bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
-            crf_label[bkg_high_conf_cls] = class_i+1
-            bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
-            crf_label[bkg_high_conf_conflict] = 255
+                bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
+                crf_label[bkg_high_conf_cls] = class_i+1
+                bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
+                crf_label[bkg_high_conf_conflict] = 255
 
-            bkg_high_conf_area[bkg_high_conf_cls] = 1
+                bkg_high_conf_area[bkg_high_conf_cls] = 1
 
             # unsure_bkg = np.logical_and((cam_class>confidence_value), (crf_label==0))
             # crf_label[unsure_bkg] = 255
@@ -1059,3 +1060,85 @@ def get_pascal_labels():
                        [64, 0, 128], [192, 0, 128], [64, 128, 128], [192, 128, 128],
                        [0, 64, 0], [128, 64, 0], [0, 192, 0], [128, 192, 0],
                        [0, 64, 128]])
+
+
+from PIL import Image
+from tool.metrics import Evaluator
+
+def _crf_with_alpha(pred_prob, ori_img):
+    bgcam_score = pred_prob.cpu().data.numpy()
+    crf_score = imutils.crf_inference_inf(ori_img, bgcam_score, labels=21)
+
+    return crf_score
+
+
+def validation(model, use_crf=False):
+    evaluator = Evaluator(num_class=21) 
+
+    im_path = "/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages"
+    img_list = open('voc12/val(id).txt').readlines()
+    pred_softmax = torch.nn.Softmax(dim=0)
+    with torch.no_grad():
+        for index, i in enumerate(img_list):
+            print(index)
+            # i = ((i.split('/'))[2])[0:-4]
+
+            print(i)
+
+            print(os.path.join(im_path, i[:-1] + '.jpg'))
+            img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))
+            target_path = os.path.join('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/SegmentationClassAug', '{}.png'.format(i[:-1]))
+            target = np.asarray(Image.open(target_path), dtype=np.int32)
+            h, w, _ = img_temp.shape
+            img_original = img_temp.astype(np.uint8)
+
+            test_size = 256
+            # container = np.zeros((test_size, test_size, 3), np.float32)
+            # if h>=w:
+            #     img_temp = cv2.resize(img_temp, (int(test_size*w/h), test_size))
+            #     # print(h,w, img_temp.shape)
+
+            #     container[:, 0:int(test_size*w/h), :] = img_temp
+            # else:
+            #     img_temp = cv2.resize(img_temp, (test_size, int(test_size*h/w)))
+            #     # print(h,w,img_temp.shape)
+            #     container[0:int(test_size*h/w), :, :] = img_temp
+
+            # img_temp = container
+
+            img_temp = cv2.resize(img_temp, (test_size, test_size))
+
+            img_temp = cv2.cvtColor(img_temp, cv2.COLOR_BGR2RGB).astype(np.float)
+            img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
+            img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
+            img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
+
+            input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
+
+            _, output= model(input)
+
+            # output = output[]
+            # print(output.shape)
+
+            # if h>=w:
+            #     output = output[:,:,:,0:int(test_size*h/w)]
+            # else:
+            #     output = output[:,:,0:int(test_size*h/w), :]
+
+
+            output = F.interpolate(output, (h, w),mode='bilinear',align_corners=False)
+            output = torch.squeeze(output)
+            pred_prob = pred_softmax(output)
+
+            
+            if use_crf:
+                crf_la = _crf_with_alpha(pred_prob, img_original)
+                crf_img = np.argmax(crf_la, 0)
+                evaluator.add_batch(target, crf_img)
+            else:
+                output = torch.argmax(output,dim=0).cpu().numpy()
+                evaluator.add_batch(target, output)
+
+    mIoU = evaluator.Mean_Intersection_over_Union()
+    return mIoU
+        
