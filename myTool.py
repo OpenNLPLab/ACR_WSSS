@@ -1073,6 +1073,7 @@ def _crf_with_alpha(pred_prob, ori_img):
 
 
 def validation(model, use_crf=False):
+    model.eval()
     evaluator = Evaluator(num_class=21) 
 
     im_path = "/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages"
@@ -1080,12 +1081,11 @@ def validation(model, use_crf=False):
     pred_softmax = torch.nn.Softmax(dim=0)
     with torch.no_grad():
         for index, i in enumerate(img_list):
-            print(index)
+            # print(index)
             # i = ((i.split('/'))[2])[0:-4]
 
-            print(i)
 
-            print(os.path.join(im_path, i[:-1] + '.jpg'))
+            # print(os.path.join(im_path, i[:-1] + '.jpg'))
             img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))
             target_path = os.path.join('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/SegmentationClassAug', '{}.png'.format(i[:-1]))
             target = np.asarray(Image.open(target_path), dtype=np.int32)

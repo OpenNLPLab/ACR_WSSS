@@ -11,10 +11,10 @@ from datetime import datetime
 from PIL import Image
 from tool import pyutils, imutils, torchutils
 import cv2
-from DPT.DPT import DPTSegmentationModel
+from DPT.DPT_saliency import DPTSegmentationModel
 
 import myTool as mytool
-from myTool import compute_joint_loss, compute_seg_label_2, compute_cam_up, decode_segmap, validation
+from myTool import compute_joint_loss, compute_seg_label_3, compute_cam_up, decode_segmap, validation
 from DenseEnergyLoss import DenseEnergyLoss
 import shutil
 # import pamr
@@ -22,8 +22,6 @@ from pamr import PAMR
 import random
 import torch.multiprocessing as mp
 import torch.distributed as dist
-from tool.metrics import Evaluator
-
 
 
 
@@ -46,11 +44,11 @@ def main():
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
     parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
-    parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
+    parser.add_argument("--val_list", default="voc12/val.txt", type=str)
     parser.add_argument("--LISTpath", default="voc12/train_aug(id).txt", type=str)
 
-    # parser.add_argument('--crf_la_value', type=int, default=4)
-    # parser.add_argument('--crf_ha_value', type=int, default=32)
+    parser.add_argument('--crf_la_value', type=int, default=4)
+    parser.add_argument('--crf_ha_value', type=int, default=32)
 
     parser.add_argument('--densecrfloss', type=float, default=1e-7,
                         metavar='M', help='densecrf loss (default: 0)')
@@ -88,16 +86,22 @@ def main():
         shutil.rmtree('/home/users/u5876230/ete_project/ete_output/seg_pred/')
     except:
         pass
+    try:
+        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/')
+    except:
+        pass
     
     os.mkdir('/home/users/u5876230/ete_project/ete_output/pseudo/')
     os.mkdir('/home/users/u5876230/ete_project/ete_output/heatmap/')
     os.mkdir('/home/users/u5876230/ete_project/ete_output/seg_pred/')
+    os.mkdir('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/')
+
 
 
     ######################################################### set processes
     args.world_size = args.gpus * args.nodes                           #
     os.environ['MASTER_ADDR'] = 'localhost'                            #
-    os.environ['MASTER_PORT'] = '8001'                                 #
+    os.environ['MASTER_PORT'] = '8888'                                 #
     mp.spawn(train, nprocs=args.gpus, args=(args,), join=True)         #
     #########################################################
 
@@ -139,7 +143,6 @@ def train(gpu, args):
     img_list = mytool.read_file(args.LISTpath)
 
     max_step = (len(img_list)//(args.batch_size * args.gpus )) * args.max_epoches
-    lr_step = int(max_step//6)
     print(len(img_list))
 
     data_list = []
@@ -156,6 +159,8 @@ def train(gpu, args):
     avg_meter = pyutils.AverageMeter('loss')
 
     timer = pyutils.Timer("Session started: ")
+
+    TRAIN_CLS_FLAG = True
 
     cls_loss_list = []
     seg_loss_list = []
@@ -201,10 +206,7 @@ def train(gpu, args):
             torch.distributed.barrier()
         
         else:
-            torch.distributed.barrier()
-            # print(0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
-
-            optimizer.lr_scale = args.seg_lr_scale * (0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
+            optimizer.lr_scale = args.seg_lr_scale
             img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_v3(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
@@ -216,6 +218,7 @@ def train(gpu, args):
             # generate cam and segmentation label on the go: ####################################
             cam_matrix = torch.zeros((b, 20, w, h))
             seg_label = np.zeros((b, w, h))
+            saliency_pseudo = np.zeros((b, w, h))
 
             for batch in range(b):
                 name = name_list[batch]
@@ -247,7 +250,7 @@ def train(gpu, args):
 
                 saliency_map = saliency[batch,:]
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
-                seg_label[batch] = compute_seg_label_2(original_img, cur_label.cpu().numpy(), \
+                seg_label[batch], saliency_pseudo[batch] = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
                 norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
             
                 # rgb_pseudo_label = decode_segmap(seg_label[batch, :, :], dataset="pascal")
@@ -257,7 +260,7 @@ def train(gpu, args):
             #########################################################
             torch.distributed.barrier()
             model.zero_grad()
-            x, seg = model(img)
+            x, seg, saliency_pred = model(img)
 
             # visualize sementation prediction
             seg_pred = F.interpolate(seg, (w, h), mode='bilinear', align_corners=False)
@@ -276,10 +279,18 @@ def train(gpu, args):
             closs = F.multilabel_soft_margin_loss(x, label)
 
             # saliency loss
-            saliency_map = saliency.cuda()
-            sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
-            saliency_map = 1-(saliency_map/255).type(torch.int64)
-            sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_map.float())
+            # saliency_map = saliency.cuda()
+            # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
+            # saliency_map = 1-(saliency_map/255).type(torch.int64)
+            # print(sal_pred.shape, saliency_map.shape)
+            # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_map.float())
+
+            # print(saliency_pseudo.shape)
+            saliency_gt = torch.from_numpy(saliency_pseudo).cuda()
+            saliency_gt = (saliency_gt == 255).type(torch.int64)
+            sal_prob = torch.sigmoid(saliency_pred[:,0,:,:])
+            # print(sal_prob.shape, saliency_gt.shape)
+            sal_loss = F.binary_cross_entropy(sal_prob.float(), saliency_gt.float())
                 
             loss = closs + celoss + dloss+ sal_loss
 
@@ -308,7 +319,7 @@ def train(gpu, args):
                     'Fin:%s' % (timer.str_est_finish()),
                     'lr: %.4f' % (optimizer.param_groups[0]['lr']), flush=True)
             torch.distributed.barrier()
-        
+
             # validation
             if (optimizer.global_step-1)%1000 == 0:
                 print('validating....')
@@ -321,32 +332,6 @@ def train(gpu, args):
 
                 seg_val_loss_list.append(miou)
                 
-                # val_loss_list = []
-                # torch.distributed.barrier()
-                # model.eval()
-                # with torch.no_grad():
-                #     val_img_list = mytool.read_file(args.val_list)
-                #     val_data_gen = mytool.chunker(val_img_list, size=1)
-                #     # print(len(val_img_list))
-                #     for val_iter in range(len(val_img_list)):
-                #         chunk = val_data_gen.__next__()
-                #         img, ori_images, label, croppings, name_list, target = mytool.get_data_from_chunk_v4(chunk, args)
-                #         img = img.cuda(non_blocking=True)
-                #         label = label.cuda(non_blocking=True)
-                #         target = target.numpy()
-                #         # target = target.cuda(non_blocking=True)
-                #         x, seg  = model(img)
-
-                #         celoss, dloss = compute_joint_loss(ori_images, seg, target, croppings, \
-                #         critersion,DenseEnergyLosslayer)
-                #         closs = F.multilabel_soft_margin_loss(x, label) 
-                #         val_loss =  closs + celoss + dloss #+ sal_loss
-                #         # print(val_iter, val_loss, name_list)  
-                #         val_loss_list.append(val_loss.cpu().numpy())
-                #         # print(val_loss.cpu().numpy()) 
-                #         torch.distributed.barrier()
-
-                # seg_val_loss_list.append((sum(val_loss_list)/len(val_loss_list))[0])
                 print(seg_val_loss_list)
 
                 if gpu==0:
@@ -356,11 +341,11 @@ def train(gpu, args):
 
             model.train()
 
-        torch.distributed.barrier()
+    torch.distributed.barrier()
     torch.distributed.destroy_process_group()
 
     if gpu==0:
-        torch.save(model.module.state_dict(), os.path.join('weight', args.session_name + '_last.pth'))
+        torch.save(model.module.state_dict(), os.path.join('weight', args.session_name + '.pth'))
         print('model saved!')
 
 if __name__ == '__main__':
