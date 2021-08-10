@@ -41,7 +41,9 @@ def main():
     parser.add_argument("--cls_step", default=0.5, type=float)
     parser.add_argument("--seg_lr_scale", default=0.1, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
-    parser.add_argument("--sal_loss", default=False, type=bool)
+    parser.add_argument("--sal_loss", default=True, type=bool)
+    parser.add_argument("--val", default=True, type=bool)
+
 
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
@@ -249,7 +251,7 @@ def train(gpu, args):
                 
                 cam_up_single = cam_matrix[batch,:,:,:]
                 # cam_up_single = cam_up_single/(torch.amax(cam_up_single, (1, 2), keepdim=True) + 1e-5)
-                # cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
                 norm_cam = cam_up_single / (np.max(cam_up_single, (1, 2), keepdims=True) + 1e-5)
@@ -258,9 +260,23 @@ def train(gpu, args):
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
                 seg_label[batch], saliency_pseudo[batch] = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
                 norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
+                
+                # print(np.unique(seg_label[batch]))
+
+                # original_img = original_img.transpose(2,0,1).astype(np.uint8)
+
+                # print(original_img.shape, pseudo.shape )
+
+                # pseudo_tmp = pamr((torch.from_numpy(original_img.transpose(2,0,1).astype(np.uint8))).\
+                #     unsqueeze(0).float().cuda(), torch.from_numpy(pseudo).unsqueeze(0).unsqueeze(0).float().cuda()).squeeze(0)
+
+                # seg_label[batch] = pseudo_tmp.cpu().numpy()
+                # print(np.unique(seg_label[batch,:,:]))
             
                 # rgb_pseudo_label = decode_segmap(seg_label[batch, :, :], dataset="pascal")
-                # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
+                # # print(rgb_pseudo_label.shape, original_img.shape)
+
+                # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_pamr.png'.format(name),
                 #             (rgb_pseudo_label * 255).astype('uint8') * 0.5 + original_img * 0.5)
                 
             #########################################################
@@ -286,19 +302,30 @@ def train(gpu, args):
 
 
             if args.sal_loss:
-                # saliency_gt = torch.from_numpy(saliency_pseudo).cuda()
-                # saliency_gt =1 - (saliency_gt == 255).type(torch.int64)
-                # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
-                # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float())
+
+                pseudo_bkg = (torch.from_numpy(seg_label)==0).cuda()
+                saliency_gt = torch.from_numpy(saliency_pseudo).cuda()
+                saliency_gt =1 - (saliency_gt == 255).type(torch.int64)
+                bkg_alignment = (pseudo_bkg == saliency_gt)
+                sal_weight = (torch.sum(bkg_alignment, dim=(1,2))).double()/(seg.shape[1]*seg.shape[2])
+
+                sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
+                sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float(), reduction='none').mean(dim=(1,2))
+                sal_loss = ((torch.exp(sal_weight)-1)*sal_loss).mean()
+
+
 
                 # saliency loss
-                saliency_map = saliency.cuda()
-                sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
-                saliency_map = 1-(saliency_map/255).type(torch.int64)
-                sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_map.float())
+                # saliency_map = saliency.cuda()
+                # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
+                # saliency_map = 1-(saliency_map/255).type(torch.int64)
+                # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_map.float())
                 
+                # print(sal_loss, celoss)
                 loss = closs + celoss + dloss + sal_loss
             else:
+                # print(sal_loss, celoss)
+
                 loss = closs + celoss + dloss
 
             avg_meter.add({'loss': loss.item()})
@@ -324,7 +351,7 @@ def train(gpu, args):
             torch.distributed.barrier()
         
             # validation
-            if (optimizer.global_step-1)%1000 == 0:
+            if (optimizer.global_step-1)%1000 == 0 and args.val:
                 print('validating....')
                 torch.distributed.barrier()
                 model.eval()

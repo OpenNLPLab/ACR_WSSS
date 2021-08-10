@@ -275,6 +275,7 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
                 bkg_high_conf_area[bkg_high_conf_cls] = 1
 
     rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    # print(rgb_pseudo_label.shape, ori_img.shape)
     cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_{}.png'.format(name, accuracy),
                         (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
 
