@@ -34,6 +34,8 @@ def setup(seed):
     # random.seed(seed)
 
 def main():
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=2, type=int)
     parser.add_argument("--max_epoches", default=50, type=int)
@@ -42,6 +44,7 @@ def main():
     parser.add_argument("--seg_lr_scale", default=0.1, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
     parser.add_argument("--sal_loss", default=False, type=bool)
+    parser.add_argument("--val", default=False, type=bool)
 
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
@@ -99,7 +102,6 @@ def main():
     os.mkdir('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/')
 
 
-
     ######################################################### set processes
     args.world_size = args.gpus * args.nodes                           #
     os.environ['MASTER_ADDR'] = 'localhost'                            #
@@ -126,7 +128,7 @@ def train(gpu, args):
     # freeze the resnet part
     for name, param in model.named_parameters():
         # if 'backbone' in name:
-            # param.requires_grad = False
+        #     param.requires_grad = False
         if gpu == 0:
             print(name, param.requires_grad)
 
@@ -249,12 +251,13 @@ def train(gpu, args):
                 
                 cam_up_single = cam_matrix[batch,:,:,:]
                 # cam_up_single = cam_up_single/(torch.amax(cam_up_single, (1, 2), keepdim=True) + 1e-5)
-                # cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
                 norm_cam = cam_up_single / (np.max(cam_up_single, (1, 2), keepdims=True) + 1e-5)
 
                 saliency_map = saliency[batch,:]
+                saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
                 seg_label[batch], saliency_pseudo[batch] = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
                 norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
@@ -267,6 +270,7 @@ def train(gpu, args):
             torch.distributed.barrier()
             model.zero_grad()
             x, seg = model(img)
+         
 
             # visualize sementation prediction
             seg_pred = F.interpolate(seg, (w, h), mode='bilinear', align_corners=False)
@@ -279,27 +283,48 @@ def train(gpu, args):
                 seg_pred_b = decode_segmap(seg_pred_b.cpu().numpy(), dataset="pascal")
                 cv2.imwrite('/home/users/u5876230/ete_project/ete_output/seg_pred/{}_{}.png'.format(name, iter),
                             (seg_pred_b * 255).astype('uint8')*0.5 + original_img*0.5)
-            # print(np.unique(seg_label))
+
             celoss, dloss = compute_joint_loss(ori_images, seg, seg_label, croppings, critersion,DenseEnergyLosslayer)
             # celoss = criterion(seg, torch.from_numpy(seg_label).cuda())
             closs = F.multilabel_soft_margin_loss(x, label)
 
+            # entropy loss
+            seg_prob = F.softmax(seg)
+            entropy_loss1 = -seg_prob*torch.log(seg_prob+1e-8)
+            entropy_loss1 = entropy_loss1.sum(dim=1)
+            entropy_loss1 = entropy_loss1.mean()
+            # ------------------------------------------
 
             if args.sal_loss:
                 # saliency_gt = torch.from_numpy(saliency_pseudo).cuda()
-                # saliency_gt =1 - (saliency_gt == 255).type(torch.int64)
+                # saliency_gt = (1 - saliency_gt).type(torch.int64)
+                # # print(torch.unique(saliency_gt))
                 # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
-                # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float())
+                # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float(), reduction='none')
+                # sal_loss[saliency_gt == -254] = 0
+                # sal_loss = torch.mean(sal_loss, dim=(0,1,2))
 
                 # saliency loss
                 saliency_map = saliency.cuda()
-                sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
+                sal_pred = ((F.softmax(seg, dim=1))[:,0,:,:])
                 saliency_map = 1-(saliency_map/255).type(torch.int64)
                 sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_map.float())
+
+                # pseudo_bkg = (torch.from_numpy(seg_label)==0).cuda()
+                # saliency_gt = torch.from_numpy(saliency_pseudo).cuda()
+                # saliency_gt =1 - (saliency_gt == 255).type(torch.int64)
+                # bkg_alignment = (pseudo_bkg == saliency_gt)
+                # # print(bkg_alignment.shape, seg.shape)
+                # sal_weight = (torch.sum(bkg_alignment, dim=(1,2))).double()/(seg.shape[2]*seg.shape[3])
+
+                # # # print(sal_weight)
+                # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
+                # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float(), reduction='none').mean(dim=(1,2))
+                # sal_loss = (((torch.exp(sal_weight)-1)*sal_loss).mean())/b
                 
-                loss = closs + celoss + dloss + sal_loss
+                loss = closs + celoss + dloss + sal_loss #+ entropy_loss1
             else:
-                loss = closs + celoss + dloss
+                loss = closs + celoss + dloss #+ entropy_loss1
 
             avg_meter.add({'loss': loss.item()})
 
@@ -307,7 +332,7 @@ def train(gpu, args):
             loss.backward()
             optimizer.step()
 
-            if (optimizer.global_step-1)%50 == 0 and gpu ==0:
+            if (optimizer.global_step-1)%100 == 0 and gpu ==0:
                 seg_loss_list.append(avg_meter.get('loss'))
                 vis.line(seg_loss_list,
                         win='train_from_init_seg_part_{}'.format(args.session_name),
@@ -324,7 +349,7 @@ def train(gpu, args):
             torch.distributed.barrier()
         
             # validation
-            if (optimizer.global_step-1)%1000 == 0:
+            if (optimizer.global_step-1)%1000 == 0 and args.val:
                 print('validating....')
                 torch.distributed.barrier()
                 model.eval()
