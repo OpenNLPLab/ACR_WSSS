@@ -117,6 +117,8 @@ def train(gpu, args):
     setup(0)
 
     model = DPTSegmentationModel(num_classes=20)
+    weights_dict = torch.load('weight/train_from_init_29_best.pth')
+    model.load_state_dict(weights_dict, strict=False)
 
     torch.cuda.set_device(gpu)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -171,7 +173,7 @@ def train(gpu, args):
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
-        if (optimizer.global_step-1) < args.cls_step * max_step:
+        if (optimizer.global_step-1) > args.cls_step * max_step:
             img, ori_images, label, croppings, name_list = mytool.get_data_from_chunk_v2(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
@@ -209,13 +211,14 @@ def train(gpu, args):
             torch.distributed.barrier()
         
         else:
+           
             torch.distributed.barrier()
             if args.step_lr:
                 optimizer.lr_scale = args.seg_lr_scale * (0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
             else:
                 optimizer.lr_scale = args.seg_lr_scale #* (0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
 
-            img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_v3(chunk, args)
+            img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_v5(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
                 
@@ -261,30 +264,15 @@ def train(gpu, args):
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
                 seg_label[batch], saliency_pseudo[batch] = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
                 norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
-                
-                # print(np.unique(seg_label[batch]))
-
-                # original_img = original_img.transpose(2,0,1).astype(np.uint8)
-
-                # print(original_img.shape, pseudo.shape )
-
-                # pseudo_tmp = pamr((torch.from_numpy(original_img.transpose(2,0,1).astype(np.uint8))).\
-                #     unsqueeze(0).float().cuda(), torch.from_numpy(pseudo).unsqueeze(0).unsqueeze(0).float().cuda()).squeeze(0)
-
-                # seg_label[batch] = pseudo_tmp.cpu().numpy()
-                # print(np.unique(seg_label[batch,:,:]))
             
                 # rgb_pseudo_label = decode_segmap(seg_label[batch, :, :], dataset="pascal")
-                # # print(rgb_pseudo_label.shape, original_img.shape)
-
-                # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_pamr.png'.format(name),
+                # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
                 #             (rgb_pseudo_label * 255).astype('uint8') * 0.5 + original_img * 0.5)
                 
             #########################################################
             torch.distributed.barrier()
             model.zero_grad()
             x, seg = model(img)
-         
 
             # visualize sementation prediction
             seg_pred = F.interpolate(seg, (w, h), mode='bilinear', align_corners=False)
@@ -331,7 +319,7 @@ def train(gpu, args):
                 # # print(bkg_alignment.shape, seg.shape)
                 # sal_weight = (torch.sum(bkg_alignment, dim=(1,2))).double()/(seg.shape[2]*seg.shape[3])
 
-                # # # print(sal_weight)
+                # # print(sal_weight)
                 # sal_pred = ((F.softmax(seg_pred, dim=1))[:,0,:,:])
                 # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float(), reduction='none').mean(dim=(1,2))
                 # sal_loss = (((torch.exp(sal_weight)-1)*sal_loss).mean())/b

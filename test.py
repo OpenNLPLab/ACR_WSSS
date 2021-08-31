@@ -9,7 +9,7 @@ import argparse
 import cv2
 import os.path
 import torch.nn.functional as F
-from DPT.DPT import DPTSegmentationModel
+from DPT.DPT_saliency import DPTSegmentationModel
 from myTool import *
 from tool.metrics import Evaluator
 from PIL import Image
@@ -61,7 +61,7 @@ if __name__ == '__main__':
 
     model = DPTSegmentationModel(num_classes=20)
     # weights_dict = torch.load('weight/vit_cls_seg_12.pth')
-    weights_dict = torch.load('weight/train_from_init_14.pth')
+    weights_dict = torch.load('weight/train_from_init_37_best.pth')
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         print(index)
         # i = ((i.split('/'))[2])[0:-4]
 
-        print(i)
+        # print(i)
 
         print(os.path.join(im_path, i[:-1] + '.jpg'))
         img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))

@@ -209,12 +209,12 @@ class DPT(BaseModel):
 
         # saliency head
         self.saliency_head = nn.Sequential(
-            nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(features),
+            nn.Conv2d(2304, 768, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(768),
             nn.ReLU(True),
             nn.Dropout(0.1, False),
-            nn.Conv2d(features, 1, kernel_size=1),
-            Interpolate(scale_factor=2, mode="bilinear", align_corners=True),
+            nn.Conv2d(768, 1, kernel_size=1),
+            Interpolate(scale_factor=4, mode="bilinear", align_corners=True),
         )
 
     def forward(self, x):
@@ -226,12 +226,14 @@ class DPT(BaseModel):
 
         layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
 
+        # classification head
         x_cls = layer_4.clone()
         x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
         x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
 
         # x_cls = self.cls_head(x_cls)
 
+        # segmentation head
         layer_1_rn = self.scratch.layer1_rn(layer_1)
         layer_2_rn = self.scratch.layer2_rn(layer_2)
         layer_3_rn = self.scratch.layer3_rn(layer_3)
@@ -246,23 +248,42 @@ class DPT(BaseModel):
 
         out = self.scratch.output_conv(path_1)
 
-        saliency_out = self.saliency_head(path_1)
+        # saliency head
+        # layer_2 = F.interpolate(layer_2, size=(64, 64), mode='bilinear',align_corners=False)
+        # layer_3 = F.interpolate(layer_3, size=(64, 64), mode='bilinear',align_corners=False)
+        # layer_4 = F.interpolate(layer_4, size=(64, 64), mode='bilinear',align_corners=False)
+        # saliency_feature = torch.cat((layer_1, layer_2, layer_3, layer_4), dim=1)
+        # saliency_out = self.saliency_head(saliency_feature)
 
-        return x_cls, out, saliency_out
+        return x_cls, out #, saliency_out
 
     def forward_cls(self, x):
         x_size = x.size()
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
+        layer_1, layer_2, layer_3, layer_4, _, _ = forward_vit(self.pretrained, x)
 
-        # x_cls = layer_4.clone()
-        # x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
-        # x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
-        x_cls = self.cls_head(x_cls)
+        b, n, h, w = layer_1.shape
 
-        return x_cls
+        # print(layer_1.shape, layer_2.shape, layer_3.shape, layer_4.shape)
+
+        layer_2 = F.interpolate(layer_2, size=(64, 64), mode='bilinear',align_corners=False)
+        layer_3 = F.interpolate(layer_3, size=(64, 64), mode='bilinear',align_corners=False)
+        layer_4 = F.interpolate(layer_4, size=(64, 64), mode='bilinear',align_corners=False)
+
+        # print(layer_1.shape, layer_2.shape, layer_3.shape, layer_4.shape)
+        saliency_feature = torch.cat((layer_1, layer_2, layer_3, layer_4), dim=1)
+
+        # print(saliency_feature.shape)
+        saliency_out = self.saliency_head(saliency_feature)
+
+        x_cls = layer_4.clone()
+        x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
+        x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+        # x_cls = self.cls_head(x_cls)
+
+        return x_cls, saliency_out
 
     def forward_cam(self, x):
         if self.channels_last == True:
