@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.lib.function_base import piecewise
 from torch.functional import norm
 import tool.imutils as imutils
 import torch
@@ -517,6 +518,84 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,sa
 
     return crf_label
 
+
+# use this 
+def compute_seg_label_coco(ori_img, cam_label, norm_cam, croppings, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
+    cam_label = cam_label.astype(np.uint8)
+
+    cam_dict = {}
+    cam_np = np.zeros_like(norm_cam)
+    for i in range(80):
+        if cam_label[i] > 1e-5:
+            cam_dict[i] = norm_cam[i]
+            cam_np[i] = norm_cam[i]
+    
+    # save heatmap
+    if save_heatmap:
+        img = ori_img
+        keys = list(cam_dict.keys())
+        for target_class in keys:
+            mask = cam_dict[target_class]
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+            cam_output = heatmap * 0.5 + img * 0.5
+            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
+
+    output = cls_pred.detach().cpu()
+    accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
+    # if accuracy < 1:
+    #    return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+
+    _, h, w = norm_cam.shape
+    
+    # if np.sum(cam_label)<2: # one class simple image
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+
+    bkg_high_conf_area = np.zeros([h, w], dtype=bool)
+
+    crf_label = np.argmax(cam_all, 0)
+    crf_label[crf_label ==0 ] = 255
+    crf_label[saliency == 0 ] = 0
+    for class_i in range(80):
+        if cam_label[class_i] > 1e-5:
+            cam_class = norm_cam[class_i, :,:]
+            cam_class_order = cam_class[cam_class > 0]
+            cam_class_order = np.sort(cam_class_order)
+            confidence_pos = int(cam_class_order.shape[0] * 0.95)
+            if confidence_pos>0:
+                confidence_value = cam_class_order[confidence_pos]
+
+                bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
+                crf_label[bkg_high_conf_cls] = class_i+1
+                saliency[bkg_high_conf_cls] = 255
+                bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
+                crf_label[bkg_high_conf_conflict] = 255
+
+                bkg_high_conf_area[bkg_high_conf_cls] = 1
+    
+    # remove background noise
+    frg = ((crf_label != 0) *  255).astype('uint8')
+    frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
+    crf_label[frg_dilate!=255] = 0
+    
+    cv2.imwrite('/home/users/u5876230/ete_project/pseudo_label/{}.png'.format(name), crf_label)
+
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
+
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
+    #                     (saliency).astype('uint8'))
+
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/{}.png'.format(name),
+    #                     (saliency).astype('uint8'))
+    
+    return crf_label, saliency
+
+
+
 def compute_joint_loss(ori_img, seg, seg_label, croppings, critersion, DenseEnergyLosslayer):
     seg_label = np.expand_dims(seg_label,axis=1)
     seg_label = torch.from_numpy(seg_label)
@@ -975,7 +1054,6 @@ def get_data_from_chunk_v4(chunk, args):
     return images, ori_images, labels, croppings, name_list, target
 
 
-
 def get_data_from_chunk_v5(chunk, args):
     img_path = args.IMpath
 
@@ -1000,7 +1078,6 @@ def get_data_from_chunk_v5(chunk, args):
         saliency_map_path = os.path.join('/home/users/u5876230/swin_sod/pascal/', '{}.png'.format(piece))
         saliency_map = PIL.Image.open(saliency_map_path)
         saliency_map = np.asarray(saliency_map)
-        # print(saliency_map.shape)
        
         img_temp =  cv2.resize(img_temp, (256,256))
         saliency_map =  cv2.resize(saliency_map, (256,256))
@@ -1069,6 +1146,178 @@ def get_data_from_chunk_val(chunk, args):
     ori_images = ori_images.transpose((3, 2, 0, 1))
     images = torch.from_numpy(images).float()
     return images, ori_images, labels, name_list
+
+
+
+classes = [{"supercategory": "person", "id": 1, "name": "person"}, # 一共80类
+               {"supercategory": "vehicle", "id": 2, "name": "bicycle"},
+               {"supercategory": "vehicle", "id": 3, "name": "car"},
+               {"supercategory": "vehicle", "id": 4, "name": "motorcycle"},
+               {"supercategory": "vehicle", "id": 5, "name": "airplane"},
+               {"supercategory": "vehicle", "id": 6, "name": "bus"},
+               {"supercategory": "vehicle", "id": 7, "name": "train"},
+               {"supercategory": "vehicle", "id": 8, "name": "truck"},
+               {"supercategory": "vehicle", "id": 9, "name": "boat"},
+               {"supercategory": "outdoor", "id": 10, "name": "traffic light"},
+               {"supercategory": "outdoor", "id": 11, "name": "fire hydrant"},
+               {"supercategory": "outdoor", "id": 13, "name": "stop sign"},
+               {"supercategory": "outdoor", "id": 14, "name": "parking meter"},
+               {"supercategory": "outdoor", "id": 15, "name": "bench"},
+               {"supercategory": "animal", "id": 16, "name": "bird"},
+               {"supercategory": "animal", "id": 17, "name": "cat"},
+               {"supercategory": "animal", "id": 18, "name": "dog"},
+               {"supercategory": "animal", "id": 19, "name": "horse"},
+               {"supercategory": "animal", "id": 20, "name": "sheep"},
+               {"supercategory": "animal", "id": 21, "name": "cow"},
+               {"supercategory": "animal", "id": 22, "name": "elephant"},
+               {"supercategory": "animal", "id": 23, "name": "bear"},
+               {"supercategory": "animal", "id": 24, "name": "zebra"},
+               {"supercategory": "animal", "id": 25, "name": "giraffe"},
+               {"supercategory": "accessory", "id": 27, "name": "backpack"},
+               {"supercategory": "accessory", "id": 28, "name": "umbrella"},
+               {"supercategory": "accessory", "id": 31, "name": "handbag"},
+               {"supercategory": "accessory", "id": 32, "name": "tie"},
+               {"supercategory": "accessory", "id": 33, "name": "suitcase"},
+               {"supercategory": "sports", "id": 34, "name": "frisbee"},
+               {"supercategory": "sports", "id": 35, "name": "skis"},
+               {"supercategory": "sports", "id": 36, "name": "snowboard"},
+               {"supercategory": "sports", "id": 37, "name": "sports ball"},
+               {"supercategory": "sports", "id": 38, "name": "kite"},
+               {"supercategory": "sports", "id": 39, "name": "baseball bat"},
+               {"supercategory": "sports", "id": 40, "name": "baseball glove"},
+               {"supercategory": "sports", "id": 41, "name": "skateboard"},
+               {"supercategory": "sports", "id": 42, "name": "surfboard"},
+               {"supercategory": "sports", "id": 43, "name": "tennis racket"},
+               {"supercategory": "kitchen", "id": 44, "name": "bottle"},
+               {"supercategory": "kitchen", "id": 46, "name": "wine glass"},
+               {"supercategory": "kitchen", "id": 47, "name": "cup"},
+               {"supercategory": "kitchen", "id": 48, "name": "fork"},
+               {"supercategory": "kitchen", "id": 49, "name": "knife"},
+               {"supercategory": "kitchen", "id": 50, "name": "spoon"},
+               {"supercategory": "kitchen", "id": 51, "name": "bowl"},
+               {"supercategory": "food", "id": 52, "name": "banana"},
+               {"supercategory": "food", "id": 53, "name": "apple"},
+               {"supercategory": "food", "id": 54, "name": "sandwich"},
+               {"supercategory": "food", "id": 55, "name": "orange"},
+               {"supercategory": "food", "id": 56, "name": "broccoli"},
+               {"supercategory": "food", "id": 57, "name": "carrot"},
+               {"supercategory": "food", "id": 58, "name": "hot dog"},
+               {"supercategory": "food", "id": 59, "name": "pizza"},
+               {"supercategory": "food", "id": 60, "name": "donut"},
+               {"supercategory": "food", "id": 61, "name": "cake"},
+               {"supercategory": "furniture", "id": 62, "name": "chair"},
+               {"supercategory": "furniture", "id": 63, "name": "couch"},
+               {"supercategory": "furniture", "id": 64, "name": "potted plant"},
+               {"supercategory": "furniture", "id": 65, "name": "bed"},
+               {"supercategory": "furniture", "id": 67, "name": "dining table"},
+               {"supercategory": "furniture", "id": 70, "name": "toilet"},
+               {"supercategory": "electronic", "id": 72, "name": "tv"},
+               {"supercategory": "electronic", "id": 73, "name": "laptop"},
+               {"supercategory": "electronic", "id": 74, "name": "mouse"},
+               {"supercategory": "electronic", "id": 75, "name": "remote"},
+               {"supercategory": "electronic", "id": 76, "name": "keyboard"},
+               {"supercategory": "electronic", "id": 77, "name": "cell phone"},
+               {"supercategory": "appliance", "id": 78, "name": "microwave"},
+               {"supercategory": "appliance", "id": 79, "name": "oven"},
+               {"supercategory": "appliance", "id": 80, "name": "toaster"},
+               {"supercategory": "appliance", "id": 81, "name": "sink"},
+               {"supercategory": "appliance", "id": 82, "name": "refrigerator"},
+               {"supercategory": "indoor", "id": 84, "name": "book"},
+               {"supercategory": "indoor", "id": 85, "name": "clock"},
+               {"supercategory": "indoor", "id": 86, "name": "vase"},
+               {"supercategory": "indoor", "id": 87, "name": "scissors"},
+               {"supercategory": "indoor", "id": 88, "name": "teddy bear"},
+               {"supercategory": "indoor", "id": 89, "name": "hair drier"},
+               {"supercategory": "indoor", "id": 90, "name": "toothbrush"}]
+
+cls_dict = {}
+for index, item in enumerate(classes):
+    category_id = item['id']
+    cls_dict[category_id] = index
+
+
+def get_coco_cls_label(name):
+    label_txt = open('/home/users/u5876230/coco/annotations/bbx/' + name + '.txt')
+    label = label_txt.readlines()[0:]
+    # print(name, label)
+    # label_list = []
+
+    multi_cls_lab = np.zeros((80), np.float32)
+
+    for item in label:
+        # category_index = int(item.split(',')[0].split(':')[1])
+        category_index = int(item.split(' ')[2])
+
+        class_index = cls_dict[category_index]
+        # print(class_index)
+        multi_cls_lab[class_index] = 1
+
+    # multi_cls_lab = torch.from_numpy(multi_cls_lab)
+    label_txt.close()
+    return multi_cls_lab
+
+
+def get_data_from_chunk_coco(chunk, args):
+    # print(chunk)
+    img_path = args.IMpath
+
+    scale = np.random.uniform(0.7, 1.3)
+
+    dim = args.crop_size
+    images = np.zeros((dim, dim, 3, len(chunk)))
+    saliency = np.zeros((dim, dim, len(chunk)))
+
+    ori_images = np.zeros((dim, dim, 3, len(chunk)),dtype=np.uint8)
+    croppings = np.zeros((dim, dim, len(chunk)))
+    labels = []
+    name_list = []
+
+    for i, piece in enumerate(chunk):
+        piece = piece.split('.')[0]
+        cls_label = get_coco_cls_label(piece)
+        assert(np.sum(cls_label)>0)
+
+        # print(cls_label)
+        labels.append(cls_label)
+
+        name_list.append(piece)
+        flip_p = np.random.uniform(0, 1)
+        img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
+        img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
+        saliency_map_path = os.path.join('/home/users/u5876230/swin_sod/coco_saliency/', '{}.png'.format(piece))
+        saliency_map = PIL.Image.open(saliency_map_path)
+        saliency_map = np.asarray(saliency_map)
+        # print(saliency_map.shape)
+        # img_temp = scale_im(img_temp, scale)
+        img_temp, saliency_map = RandomResizeLong2(img_temp, saliency_map, int(dim*0.9), int(dim/0.875))
+
+        img_temp, saliency_map = flip2(img_temp,saliency_map, flip_p)
+
+        img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
+        img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
+        img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
+        img_temp, cropping, saliency_map = RandomCrop2(img_temp,saliency_map, dim)
+
+        ori_temp = np.zeros_like(img_temp)
+        ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
+        ori_temp[:, :, 1] = (img_temp[:, :, 1] * 0.224 + 0.456) * 255.
+        ori_temp[:, :, 2] = (img_temp[:, :, 2] * 0.225 + 0.406) * 255.
+        ori_images[:, :, :, i] = ori_temp.astype(np.uint8)
+        croppings[:,:,i] = cropping.astype(np.float32)
+
+        images[:, :, :, i] = img_temp
+        saliency[:, :,  i] = saliency_map
+
+    images = images.transpose((3, 2, 0, 1))
+    saliency = saliency.transpose((2, 0, 1))
+    ori_images = ori_images.transpose((3, 2, 0, 1))
+    images = torch.from_numpy(images).float()
+    saliency = torch.from_numpy(saliency).float()
+    labels = torch.from_numpy(np.array(labels))
+
+
+    return images, ori_images, labels, croppings, name_list, saliency
+
 
 
 def compute_cos(fts1, fts2):
