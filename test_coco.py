@@ -1,3 +1,4 @@
+from matplotlib.pyplot import waitforbuttonpress
 import numpy as np
 import torch
 from torch.backends import cudnn
@@ -13,29 +14,55 @@ from DPT.DPT import DPTSegmentationModel
 from myTool import *
 from tool.metrics import Evaluator
 from PIL import Image
+from pycocotools.coco import COCO
+from pycocotools import mask
 
-classes = ['bkg',
-    'aeroplane',
-           'bicycle',
-           'bird',
-           'boat',
-           'bottle',
-           'bus',
-           'car',
-           'cat',
-           'chair',
-           'cow',
-           'diningtable',
-           'dog',
-           'horse',
-           'motorbike',
-           'person',
-           'pottedplant',
-           'sheep',
-           'sofa',
-           'train',
-           'tvmonitor']
 
+def getImgId(name, load_dict):
+	# load_dict = json.load(open(path, 'r'))
+	images = load_dict['images']
+
+	for i in range(len(images)):
+		file_name = images[i]['file_name'].split('.')[0]
+		if file_name == name:
+				#print(images[i])
+				return images[i]['id']
+
+cls_dict = {}
+for index, item in enumerate(coco_classes):
+    category_id = item['id']
+    cls_dict[index] = category_id
+
+base_dir = '/home/users/u5876230/coco/'
+ann_file = os.path.join(base_dir, 'annotations/instances_{}{}.json'.format('val', 2014))
+coco = COCO(ann_file)
+coco_mask = mask
+CAT_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 27, 28, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 46, 47, 48, 49,
+                50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 67, 70, 72, 73, 74, 75,
+                76, 77, 78, 79, 80, 81, 82, 84, 85, 86, 87, 88, 89, 90]
+
+def get_coco_gt(name, h, w):
+    img_id = getImgId(name, coco.dataset)
+
+    cocotarget = coco.loadAnns(coco.getAnnIds(imgIds=img_id))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    # print(cocotarget)
+    for instance in cocotarget:
+        rle = coco_mask.frPyObjects(instance['segmentation'], h, w)
+        m = coco_mask.decode(rle)
+        cat = instance['category_id']
+
+        if cat in CAT_LIST:
+            c = CAT_LIST.index(cat)
+
+        else:
+            continue
+        if len(m.shape) < 3:
+            mask[:, :] += (mask == 0) * (m * c)
+        else:
+            mask[:, :] += (mask == 0) * (((np.sum(m, axis=2)) > 0) * c).astype(np.uint8)
+    return mask
 
 
 def _crf_with_alpha(pred_prob, ori_img):
@@ -46,7 +73,7 @@ def _crf_with_alpha(pred_prob, ori_img):
 
 if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+    os.environ["CUDA_VISIBLE_DEVICES"] = '6'
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default='./netWeights/RRM_final.pth', type=str)
@@ -60,8 +87,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     model = DPTSegmentationModel(num_classes=80)
-    # weights_dict = torch.load('weight/vit_cls_seg_12.pth')
-    weights_dict = torch.load('weight/train_from_init_coco_last.pth')
+    weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()
@@ -75,18 +101,29 @@ if __name__ == '__main__':
     pred_softmax = torch.nn.Softmax(dim=0)
     # img_list = ['2007_000464 ']
     for index, i in enumerate(img_list):
-        print(i)
+        # print(i)
         print(index)
         # i = ((i.split('/'))[2])[0:-4]
         i= i[0:-3]
 
         print(os.path.join(im_path, i[:-1] + '.jpg'))
         img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))
-        if args.val==True:
-            target_path = os.path.join('/home/users/u5876230/coco/segmentation/', '{}.png'.format(i[:-1]))
-            target = np.asarray(Image.open(target_path), dtype=np.int32)
+       
         h, w, _ = img_temp.shape
         img_original = img_temp.astype(np.uint8)
+
+        if args.val==True:
+
+            # target_path = os.path.join('/home/users/u5876230/coco/segmentation/', '{}.png'.format(i[:-1]))
+            # target = np.asarray(Image.open(target_path), dtype=np.int32)
+            
+            name = i[:-1]
+            seg_mask = get_coco_gt(name, h, w)
+            target = seg_mask
+
+
+            # print(np.unique(target))
+
 
         test_size = 224
         # container = np.zeros((test_size, test_size, 3), np.float32)
@@ -111,6 +148,7 @@ if __name__ == '__main__':
 
         input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
+
         _, output= model(input)
 
         # output = output[]
@@ -128,6 +166,9 @@ if __name__ == '__main__':
         pred_prob = pred_softmax(output)
 
         output = torch.argmax(output,dim=0).cpu().numpy()
+
+        print(np.unique(output), np.unique(seg_mask))
+
         save_path = os.path.join(args.out_cam_pred,i[:-1] + '.png')
         cv2.imwrite(save_path,output.astype(np.uint8))
         
@@ -139,13 +180,17 @@ if __name__ == '__main__':
             if args.val:
                 evaluator.add_batch(target, crf_img)
                 mIoU = evaluator.Mean_Intersection_over_Union()
-            print(mIoU)
+                print(mIoU)
 
             imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
 
             rgb_pred = decode_segmap(crf_img, dataset="pascal")
             cv2.imwrite(os.path.join(args.out_color, i[:-1] + '.png'),
-                        (rgb_pred * 255).astype('uint8') * 0.5 + img_original* 0.5)
+                        (rgb_pred * 255).astype('uint8') * 0.7 + img_original* 0.3)
+            
+            rgb_target = decode_segmap(target, dataset="pascal")
+            cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_gt.png'),
+                        (rgb_target * 255).astype('uint8') * 0.7 + img_original* 0.3)
 
     Acc = evaluator.Pixel_Accuracy()
     Acc_class = evaluator.Pixel_Accuracy_Class()

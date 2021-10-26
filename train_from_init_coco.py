@@ -25,6 +25,7 @@ import torch.distributed as dist
 from tool.metrics import Evaluator
 
 
+
 import visdom
 
 def setup(seed):
@@ -34,7 +35,7 @@ def setup(seed):
     # random.seed(seed)
 
 def main():
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=2, type=int)
@@ -44,7 +45,6 @@ def main():
     parser.add_argument("--seg_lr_scale", default=0.1, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
     parser.add_argument("--sal_loss", default=False, type=bool)
-    parser.add_argument("--val", default=False, type=bool)
 
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
@@ -120,25 +120,18 @@ def train(gpu, args):
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu],output_device=[gpu], find_unused_parameters=True)
 
     # freeze the resnet part
-    for name, param in model.named_parameters():
-        # if 'backbone' in name:
-        #     param.requires_grad = False
-        if gpu == 0:
-            print(name, param.requires_grad)
+    # for name, param in model.named_parameters():
+    #     if 'backbone' in name:
+    #         param.requires_grad = False
+    #     if gpu == 0:
+    #         print(name, param.requires_grad)
 
     # pixel adaptive refine module
     pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
 
-    #loss
-    critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
-    # criterion = SegmentationLosses(weight=None, cuda=True).build_loss(mode='ce')
-    DenseEnergyLosslayer = DenseEnergyLoss(weight=args.densecrfloss, sigma_rgb=args.sigma_rgb,
-                                     sigma_xy=args.sigma_xy, scale_factor=args.rloss_scale)
-
     print(vars(args))
 
     batch_size = args.batch_size
-    # img_list = mytool.read_file(args.LISTpath)
     img_list = os.listdir('/home/users/u5876230/coco/train2014/')
 
     max_step = (len(img_list)//(args.batch_size * args.gpus )) * args.max_epoches
@@ -152,10 +145,29 @@ def train(gpu, args):
 
     data_gen = mytool.chunker(data_list, batch_size)
 
-    params = model.parameters()
-    # print(params)
-    optimizer = torchutils.PolyOptimizer(params, lr=args.lr, weight_decay=args.wt_dec, max_step=max_step)
+    from myTool import coco_classes
+    print(len(coco_classes))
 
+    # get class weights
+    z = np.zeros((80,))
+
+    for iter in range(len(img_list)):
+        chunk = data_gen.__next__()
+        img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_coco(chunk, args)
+
+
+    #loss
+    critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
+    # criterion = SegmentationLosses(weight=None, cuda=True).build_loss(mode='ce')
+    DenseEnergyLosslayer = DenseEnergyLoss(weight=args.densecrfloss, sigma_rgb=args.sigma_rgb,
+                                     sigma_xy=args.sigma_xy, scale_factor=args.rloss_scale)
+
+    
+
+
+    params = model.parameters()
+    optimizer = torchutils.PolyOptimizer(params, lr=args.lr, weight_decay=args.wt_dec, max_step=max_step)
+    
     avg_meter = pyutils.AverageMeter('loss')
 
     timer = pyutils.Timer("Session started: ")
@@ -177,7 +189,7 @@ def train(gpu, args):
             # images = F.interpolate(images, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
 
             x = model.module.forward_cls(images)
-
+            # print(x.shape)
             loss = F.multilabel_soft_margin_loss(x, label)
 
             avg_meter.add({'loss': loss.item()})
@@ -206,7 +218,7 @@ def train(gpu, args):
         else:
             torch.distributed.barrier()
             if args.step_lr:
-                optimizer.lr_scale = args.seg_lr_scale * (0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
+                optimizer.lr_scale = args.seg_lr_scale * (0.05**((optimizer.global_step - args.cls_step * max_step)//lr_step))
             else:
                 optimizer.lr_scale = args.seg_lr_scale #* (0.1**((optimizer.global_step - args.cls_step * max_step)//lr_step))
 
@@ -255,7 +267,7 @@ def train(gpu, args):
                 saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
                 seg_label[batch], saliency_pseudo[batch] = mytool.compute_seg_label_coco(original_img, cur_label.cpu().numpy(), \
-                norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
+                norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=False)
                 
                 # print(np.unique(seg_label[batch]))
 
@@ -354,28 +366,8 @@ def train(gpu, args):
                     'imps:%.1f' % ((iter+1) * args.batch_size / timer.get_stage_elapsed()),
                     'Fin:%s' % (timer.str_est_finish()),
                     'lr: %.4f' % (optimizer.param_groups[0]['lr']), flush=True)
+
             torch.distributed.barrier()
-        
-            # validation
-            if (optimizer.global_step-1)%1000 == 0 and args.val:
-                print('validating....')
-                torch.distributed.barrier()
-                model.eval()
-                miou = validation(model)
-                if miou > max(seg_val_loss_list) and gpu==0:
-                    torch.save(model.module.state_dict(), os.path.join('weight', args.session_name + '_best.pth'))
-                    print('model saved!')
-
-                seg_val_loss_list.append(miou)
-                print(seg_val_loss_list)
-
-                if gpu==4:
-                    vis.line(seg_val_loss_list,\
-                    win='train_from_init_seg_val_{}'.format(args.session_name),
-                    opts=dict(title='train_from_init_seg_val_{}'.format(args.session_name)))
-
-            model.train()
-
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()
 
