@@ -66,14 +66,14 @@ def get_coco_gt(name, h, w):
 
 
 def _crf_with_alpha(pred_prob, ori_img):
-    bgcam_score = pred_prob.cpu().data.numpy()
+    bgcam_score = pred_prob
     crf_score = imutils.crf_inference_inf(ori_img, bgcam_score, labels=81)
 
     return crf_score
 
 if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '6'
+    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default='./netWeights/RRM_final.pth', type=str)
@@ -167,13 +167,14 @@ if __name__ == '__main__':
 
         output = torch.argmax(output,dim=0).cpu().numpy()
 
-        print(np.unique(output), np.unique(seg_mask))
+        # print(np.unique(output), np.unique(seg_mask))
 
         save_path = os.path.join(args.out_cam_pred,i[:-1] + '.png')
         cv2.imwrite(save_path,output.astype(np.uint8))
         
         if args.out_la_crf is not None:
-            pred_prob = _crf_with_alpha(pred_prob, img_original)
+            pred_prob = pred_prob.cpu().data.numpy()
+            # pred_prob = _crf_with_alpha(pred_prob, img_original)
 
             crf_img = np.argmax(pred_prob, 0)
 
