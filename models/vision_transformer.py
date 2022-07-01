@@ -394,11 +394,9 @@ class VisionTransformer(nn.Module):
 
     def forward_flex(self, x):
         b, c, h, w = x.shape
-
         pos_embed = self._resize_pos_embed(
             self.pos_embed, h // self.patch_size[1], w // self.patch_size[0]
         )
-
         B = x.shape[0]
 
         if hasattr(self.patch_embed, "backbone"):
@@ -451,8 +449,6 @@ class VisionTransformer(nn.Module):
         return posemb
 
     
-
-
 
 
 def _init_vit_weights(m, n: str = '', head_bias: float = 0., jax_impl: bool = False):

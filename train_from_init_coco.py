@@ -28,8 +28,8 @@ from tool.metrics import Evaluator
 import visdom
 
 def setup(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    torch.manual_seed(0)
+    torch.cuda.manual_seed(0)
     np.random.seed(seed)
     # random.seed(seed)
 
@@ -38,12 +38,13 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=2, type=int)
-    parser.add_argument("--max_epoches", default=50, type=int)
+    parser.add_argument("--max_epoches", default=30, type=int)
     parser.add_argument("--lr", default=0.04, type=float)
     parser.add_argument("--cls_step", default=0.5, type=float)
     parser.add_argument("--seg_lr_scale", default=0.1, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
     parser.add_argument("--sal_loss", default=False, type=bool)
+    parser.add_argument("--backbone", default="vitb_hybrid", type=str)
 
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
@@ -98,18 +99,18 @@ def main():
     ######################################################### set processes
     args.world_size = args.gpus * args.nodes                           #
     os.environ['MASTER_ADDR'] = 'localhost'                            #
-    os.environ['MASTER_PORT'] = '8888'                                 #
+    os.environ['MASTER_PORT'] = '7777'                                 #
     mp.spawn(train, nprocs=args.gpus, args=(args,), join=True)         #
     #########################################################
 
 def train(gpu, args):
     vis = visdom.Visdom()
     rank = args.nr * args.gpus + gpu
-    print(rank)
+    print(rank, gpu)
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
-    setup(0)
+    setup(rank)
 
-    model = DPTSegmentationModel(num_classes=80)
+    model = DPTSegmentationModel(num_classes=80, backbone_name=args.backbone)
 
     torch.cuda.set_device(gpu)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -145,14 +146,27 @@ def train(gpu, args):
     data_gen = mytool.chunker(data_list, batch_size)
 
     from myTool import coco_classes
-    print(len(coco_classes))
+    # print(len(coco_classes))
 
     # get class weights
-    # z = np.zeros((80,))
+    class_weight = torch.zeros((81,))
+    class_weight[0] = len(img_list)
 
-    # for iter in range(len(img_list)):
-    #     chunk = data_gen.__next__()
+    tmp_data_gen = mytool.chunker(img_list, 64)
+
+    # for iter in range(len(img_list)-1):
+    #     chunk = tmp_data_gen.__next__()
     #     img, ori_images, label, croppings, name_list, saliency = mytool.get_data_from_chunk_coco(chunk, args)
+    #     if gpu == 0:
+    #         # print(label.shape)
+    #         # print(iter*64)
+    #         label = torch.sum(label, dim=0)
+    #         class_weight[1:] = class_weight[1:] + label
+    #         # print(class_weight)
+    #         class_weight_vector = len(img_list)/class_weight
+    #         # print(class_weight_vector)
+
+    # print(class_weight_vector)
 
     #loss
     # critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
@@ -180,6 +194,7 @@ def train(gpu, args):
 
             images = img.cuda(non_blocking=True)
             label  = label.cuda(non_blocking=True)
+            # print(name_list)
 
             # images = F.interpolate(images, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
 
@@ -193,7 +208,7 @@ def train(gpu, args):
             loss.backward()
             optimizer.step()
 
-            if (optimizer.global_step-1)%50 == 0 and gpu == 0:
+            if (optimizer.global_step-1)%50 == 0 and rank==0:
                 cls_loss_list.append(avg_meter.get('loss'))
                 vis.line(cls_loss_list,
                         win='train_from_init_cls_part_{}_{}'.format(args.session_name, torch.distributed.get_rank()),
@@ -244,7 +259,7 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _ = model.module.generate_cam(batch, start_layer=0)
+                        cam, _, _ = model.module.generate_cam_2(batch, start_layer=6)
 
                         cam = cam.reshape(int(h //16), int(w //16))
 
@@ -262,7 +277,7 @@ def train(gpu, args):
                 saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
                 seg_label[batch], saliency_pseudo[batch] = mytool.compute_seg_label_coco(original_img, cur_label.cpu().numpy(), \
-                norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=False)
+                norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
                 
                 # print(np.unique(seg_label[batch]))
 
@@ -347,7 +362,7 @@ def train(gpu, args):
             loss.backward()
             optimizer.step()
 
-            if (optimizer.global_step-1)%100 == 0 and gpu ==0:
+            if (optimizer.global_step-1)%100 == 0 and rank ==0:
                 seg_loss_list.append(avg_meter.get('loss'))
                 vis.line(seg_loss_list,
                         win='train_from_init_seg_part_{}'.format(args.session_name),

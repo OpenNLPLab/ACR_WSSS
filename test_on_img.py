@@ -137,7 +137,6 @@ if __name__ == '__main__':
 
         x, res_cam = model.forward_cam(img)
         # x, res_cam = model.forward_cam(img)
-        # print(res_cam.shape)
 
         res_cam = F.upsample(res_cam, (h,w), mode='bilinear', align_corners=False)[0]
         res_cam = res_cam.detach().cpu().numpy() * label.clone().view(20, 1, 1).numpy()

@@ -151,7 +151,7 @@ if __name__ == '__main__':
         keys = list(cam_dict.keys())
         for target_class in keys:
             mask = cam_dict[target_class]
-           
+        
             heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
 
             img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0] ))

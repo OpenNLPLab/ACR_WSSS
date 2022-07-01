@@ -16,7 +16,10 @@ if version_info >= (2, 6, 0):
         fp = None
         try:
             fp, pathname, description = imp.find_module('_bilateralfilter', [dirname(__file__)])
+            print(fp, pathname, description)
+            # print('11111111111')
         except ImportError:
+            # print('2222222222')
             import _bilateralfilter
             return _bilateralfilter
         if fp is not None:

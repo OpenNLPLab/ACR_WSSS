@@ -10,7 +10,9 @@ import os
 import matplotlib.pyplot as plt
 import PIL.Image
 import math
-    
+from torchvision import transforms
+from torch.autograd import Variable
+from canny import CannyFilter
 
 classes = ['aeroplane',
            'bicycle',
@@ -123,7 +125,71 @@ def compute_seg_label(ori_img, cam_label, norm_cam, croppings, name, iter, salie
 
     return crf_label
 
-def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
+# ablation for crf based method(rrm+saliency)
+def compute_seg_label_2(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=True, cut_threshold = 0.9):
+    cam_label = cam_label.astype(np.uint8)
+
+    cam_dict = {}
+    cam_np = np.zeros_like(norm_cam)
+    for i in range(20):
+        if cam_label[i] > 1e-5:
+            cam_dict[i] = norm_cam[i]
+            cam_np[i] = norm_cam[i]
+
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+    _, bg_w, bg_h = bg_score.shape
+
+    cam_img = np.argmax(cam_all, 0)
+
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 4)
+    crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
+    crf_la_label = np.argmax(crf_la, 0)
+    crf_ha_label = np.argmax(crf_ha, 0)
+    crf_label = crf_la_label.copy()
+    crf_label[crf_la_label == 0] = 255
+
+    single_img_classes = np.unique(crf_la_label)
+    cam_sure_region = np.zeros([bg_w, bg_h], dtype=bool)
+    for class_i in single_img_classes:
+        if class_i != 0:
+            class_not_region = (cam_img != class_i)
+            cam_class = cam_all[class_i, :, :]
+            cam_class[class_not_region] = 0
+            cam_class_order = cam_class[cam_class > 0.1]
+            cam_class_order = np.sort(cam_class_order)
+            confidence_pos = int(cam_class_order.shape[0] * 0.6)
+            if confidence_pos>0:
+                confidence_value = cam_class_order[confidence_pos]
+                class_sure_region = (cam_class > confidence_value)
+                cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
+        else:
+            class_not_region = (cam_img != class_i)
+            cam_class = cam_all[class_i, :, :]
+            cam_class[class_not_region] = 0
+            class_sure_region = (cam_class > 0.8)
+            cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
+
+    cam_not_sure_region = ~cam_sure_region
+
+    crf_label[crf_ha_label == 0] = 0
+    crf_label_np = np.concatenate([np.expand_dims(crf_ha[0, :, :], axis=0), crf_la[1:, :, :]])
+    crf_not_sure_region = np.max(crf_label_np, 0) < 0.8
+    not_sure_region = np.logical_or(crf_not_sure_region, cam_not_sure_region)
+
+    crf_label[not_sure_region] = 255
+    crf_label[saliency == 0 ] = 0
+
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color_rrm.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
+    return crf_label, saliency
+
+# use this 
+def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.9):
+    ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
     cam_label = cam_label.astype(np.uint8)
 
     cam_dict = {}
@@ -142,16 +208,15 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, sal
             heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
             img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
             cam_output = heatmap * 0.5 + img * 0.5
-            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
+            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/vis/', name + '_{}_heatmap_orig.jpg'.format(classes[target_class])), cam_output)
 
-    output = cls_pred.detach().cpu()
-    accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
+    # output = cls_pred.detach().cpu()
+    # accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
     # if accuracy < 1:
     #    return np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
 
     _, h, w = norm_cam.shape
     
-    # if np.sum(cam_label)<2: # one class simple image
     bg_score = np.power(1 - np.max(cam_np, 0), 32)
     bg_score = np.expand_dims(bg_score, axis=0)
     cam_all = np.concatenate((bg_score, cam_np))
@@ -159,68 +224,49 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, croppings, name, iter, sal
     bkg_high_conf_area = np.zeros([h, w], dtype=bool)
 
     crf_label = np.argmax(cam_all, 0)
-    crf_label[crf_label ==0 ] = 255
+
+    # rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_0.png'.format(name),
+    #                     (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
+    crf_label[crf_label == 0 ] = 255
     crf_label[saliency == 0 ] = 0
+
+    # rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_1.png'.format(name),
+    #                     (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
     for class_i in range(20):
         if cam_label[class_i] > 1e-5:
             cam_class = norm_cam[class_i, :,:]
             cam_class_order = cam_class[cam_class > 0]
             cam_class_order = np.sort(cam_class_order)
-            confidence_pos = int(cam_class_order.shape[0] * 0.95)
+            confidence_pos = int(cam_class_order.shape[0] * cut_threshold)
             if confidence_pos>0:
                 confidence_value = cam_class_order[confidence_pos]
-
                 bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
                 crf_label[bkg_high_conf_cls] = class_i+1
+                saliency[bkg_high_conf_cls] = 255
                 bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
                 crf_label[bkg_high_conf_conflict] = 255
 
                 bkg_high_conf_area[bkg_high_conf_cls] = 1
 
-            # unsure_bkg = np.logical_and((cam_class>confidence_value), (crf_label==0))
-            # crf_label[unsure_bkg] = 255
+    # remove background noise
+    frg = ((crf_label != 0) *  255).astype('uint8')
+    frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
+    crf_label[frg_dilate!=255] = 0
 
-    # else: # multi class hard image
-    #     high_conf = np.zeros([20, h, w], dtype=bool)
-    #     crf_label = np.ones((norm_cam.shape[1], norm_cam.shape[1])) * 255
+    cv2.imwrite('/data/u5876230/ete_wsss/pseudo/{}.png'.format(name), crf_label)
 
-    #     for class_i in range(20):
-    #         if cam_label[class_i] > 1e-5 and cls_pred[class_i] > 0.001:
-    #             cam_class = norm_cam[class_i, :,:]
-    #             cam_class_order = cam_class[cam_class > 0]
-    #             cam_class_order = np.sort(cam_class_order)
-    #             confidence_pos = int(cam_class_order.shape[0] * 0.8)
-    #             confidence_value = cam_class_order[confidence_pos]
+    # rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
+                        # (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/vis/{}_orig.png'.format(name),ori_img)
 
-    #             high_conf[class_i] = (cam_class>confidence_value)
+    return crf_label, saliency
 
-    #             crf_label[cam_class>confidence_value] = class_i+1
- 
-    #     high_conf = np.sum(high_conf, axis=0)
-    #     high_conf_area = (high_conf>0)
-    #     conflict_area = (high_conf > 1)
-    #     good_high_conf_area = (high_conf == 1)
-    #     good_low_conf_area = (high_conf == 0)
-        
-    #     # crf_label[good_low_conf_area] = 0
-
-    #     crf_label[conflict_area] = 255
-
-    #     sure_bkg = np.logical_and((saliency==0), (high_conf==0))
-    #     crf_label[sure_bkg] = 0
-    #     unsure_bkg = np.logical_and((saliency==0), (high_conf>0))
-    #     crf_label[unsure_bkg] = 255
-    #     # crf_label[saliency == 0] = 0
-
-    # cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/seg_label/', name + '.png'), crf_label)
-    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
-    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_{}.png'.format(name, accuracy),
-                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
-
-    return crf_label
-
-# use this 
-def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
+def compute_seg_label_no_saliency(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=True):
     cam_label = cam_label.astype(np.uint8)
 
     cam_dict = {}
@@ -248,6 +294,123 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
 
     _, h, w = norm_cam.shape
     
+    bg_score = np.power(1 - np.max(cam_np, 0), 8)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 8)
+    # crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
+    crf_la_label = np.argmax(crf_la, 0)
+    # crf_ha_label = np.argmax(crf_ha, 0)
+    crf_label = crf_la_label.copy()
+    crf_label[crf_la_label == 0] = 255
+    # crf_label[crf_ha_label == 0] =0
+
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
+    return crf_label, saliency
+
+
+def compute_seg_label_two_step(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=False, save_pseudo=True, cam_index=0, cut = 0.9):
+    ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
+    cam_label = cam_label.astype(np.uint8)
+
+    cam_dict = {}
+    cam_np = np.zeros_like(norm_cam)
+    for i in range(20):
+        if cam_label[i] > 1e-5:
+            cam_dict[i] = norm_cam[i]
+            cam_np[i] = norm_cam[i]
+    
+    # save heatmap
+    if save_heatmap:
+        img = ori_img
+        keys = list(cam_dict.keys())
+        for target_class in keys:
+            mask = cam_dict[target_class]
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+            cam_output = heatmap * 0.5 + img * 0.5
+            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/vis/', name + '_{}_heatmap_orig.jpg'.format(classes[target_class])), cam_output)
+
+    _, h, w = norm_cam.shape
+    
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+
+    bkg_high_conf_area = np.zeros([h, w], dtype=bool)
+
+    crf_label = np.argmax(cam_all, 0)
+
+    crf_label[crf_label == 0 ] = 255
+    crf_label[saliency == 0 ] = 0
+
+    for class_i in range(20):
+        if cam_label[class_i] > 1e-5:
+            cam_class = norm_cam[class_i, :,:]
+            cam_class_order = cam_class[cam_class > 0]
+            cam_class_order = np.sort(cam_class_order)
+            confidence_pos = int(cam_class_order.shape[0] * cut)
+            if confidence_pos>0:
+                confidence_value = cam_class_order[confidence_pos]
+                bkg_high_conf_cls = np.logical_and((cam_class>confidence_value), (crf_label==0))
+                crf_label[bkg_high_conf_cls] = class_i+1
+                saliency[bkg_high_conf_cls] = 255
+                bkg_high_conf_conflict = np.logical_and(bkg_high_conf_cls, bkg_high_conf_area)
+                crf_label[bkg_high_conf_conflict] = 255
+
+                bkg_high_conf_area[bkg_high_conf_cls] = 1
+    
+    # remove background noise
+    frg = ((crf_label != 0) *  255).astype('uint8')
+    frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
+    crf_label[frg_dilate!=255] = 0
+
+    image = cv2.imread(os.path.join('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages', '{}.jpg'.format(name)))
+    crf_label = cv2.resize(crf_label, (image.shape[1], image.shape[0]), 0, 0, interpolation = cv2.INTER_NEAREST)
+
+    if save_pseudo:
+        cv2.imwrite('/data/u5876230/ete_wsss/pseudo/{}.png'.format(name), crf_label)
+
+        rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+        cv2.imwrite('/data/u5876230/ete_wsss/pseudo/{}_color.png'.format(name),
+                            (rgb_pseudo_label * 255).astype('uint8') * 0.5 + image * 0.5)
+
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
+    #                     (saliency).astype('uint8'))
+
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/{}.png'.format(name),
+    #                     (saliency).astype('uint8'))
+    
+    return 
+
+
+def compute_seg_label_two_step_coco(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
+    cam_label = cam_label.astype(np.uint8)
+
+    cam_dict = {}
+    cam_np = np.zeros_like(norm_cam)
+    for i in range(80):
+        if cam_label[i] > 1e-5:
+            cam_dict[i] = norm_cam[i]
+            cam_np[i] = norm_cam[i]
+    
+    # save heatmap
+    if save_heatmap:
+        img = ori_img
+        keys = list(cam_dict.keys())
+        for target_class in keys:
+            mask = cam_dict[target_class]
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+            cam_output = heatmap * 0.5 + img * 0.5
+            cv2.imwrite(os.path.join('/data/u5876230/vision3d1/ete_wsss/ete_output/coco_heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
+
+    _, h, w = norm_cam.shape
+    
     # if np.sum(cam_label)<2: # one class simple image
     bg_score = np.power(1 - np.max(cam_np, 0), 32)
     bg_score = np.expand_dims(bg_score, axis=0)
@@ -258,7 +421,7 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
     crf_label = np.argmax(cam_all, 0)
     crf_label[crf_label ==0 ] = 255
     crf_label[saliency == 0 ] = 0
-    for class_i in range(20):
+    for class_i in range(80):
         if cam_label[class_i] > 1e-5:
             cam_class = norm_cam[class_i, :,:]
             cam_class_order = cam_class[cam_class > 0]
@@ -276,23 +439,21 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, croppings, name, iter, sal
                 bkg_high_conf_area[bkg_high_conf_cls] = 1
     
     # remove background noise
-    frg = ((crf_label != 0) *  255).astype('uint8')
-    frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
-    crf_label[frg_dilate!=255] = 0
-    
-    cv2.imwrite('/home/users/u5876230/ete_project/pseudo_label/{}.png'.format(name), crf_label)
+    # frg = ((crf_label != 0) *  255).astype('uint8')
+    # frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
+    # crf_label[frg_dilate!=255] = 0
+
+    image = cv2.imread(os.path.join('/home/users/u5876230/coco/train2014/', '{}.jpg'.format(name)))
+    crf_label = cv2.resize(crf_label, (image.shape[1], image.shape[0]), 0, 0, interpolation = cv2.INTER_NEAREST)
+
+    cv2.imwrite('/data/u5876230/vision3d1/ete_wsss/ete_output/coco_output/{}.png'.format(name), crf_label)
 
     rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
-    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
-                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
+    cv2.imwrite('/data/u5876230/vision3d1/ete_wsss/ete_output/coco_output/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + image * 0.5)
 
-    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
-    #                     (saliency).astype('uint8'))
-
-    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/{}.png'.format(name),
-    #                     (saliency).astype('uint8'))
     
-    return crf_label, saliency
+    return 
 
 # set safe background area, where in this area, we do not mine new objects.
 def compute_seg_label_4(ori_img, cam_label, norm_cam, croppings, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
@@ -451,7 +612,7 @@ def compute_seg_label_5(ori_img, cam_label, norm_cam, croppings, name, iter, sal
     return crf_label, saliency, frg_dilate
 
 
-def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,saliency, cls_pred, save_heatmap=False):
+def compute_seg_label_old(ori_img, cam_label, norm_cam, name, iter,saliency, cls_pred, save_heatmap=False):
     cam_label = cam_label.astype(np.uint8)
 
     cam_dict = {}
@@ -461,14 +622,14 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,sa
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
 
-    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.power(1 - np.max(cam_np, 0), 8)
     bg_score = np.expand_dims(bg_score, axis=0)
     cam_all = np.concatenate((bg_score, cam_np))
     _, bg_w, bg_h = bg_score.shape
 
     cam_img = np.argmax(cam_all, 0)
 
-    crf_la = _crf_with_alpha(ori_img, cam_dict, 4)
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 8)
     crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
     crf_la_label = np.argmax(crf_la, 0)
     crf_ha_label = np.argmax(crf_ha, 0)
@@ -485,9 +646,10 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,sa
             cam_class_order = cam_class[cam_class > 0.1]
             cam_class_order = np.sort(cam_class_order)
             confidence_pos = int(cam_class_order.shape[0] * 0.6)
-            confidence_value = cam_class_order[confidence_pos]
-            class_sure_region = (cam_class > confidence_value)
-            cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
+            if confidence_pos>0:
+                confidence_value = cam_class_order[confidence_pos]
+                class_sure_region = (cam_class > confidence_value)
+                cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
         else:
             class_not_region = (cam_img != class_i)
             cam_class = cam_all[class_i, :, :]
@@ -504,19 +666,11 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, croppings, name, iter,sa
 
     crf_label[not_sure_region] = 255
 
-    # save heatmap
-    if save_heatmap:
-        img = ori_img
-        keys = list(cam_dict.keys())
-        for target_class in keys:
-            mask = cam_dict[target_class]
-            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-            img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
-            cam_output = heatmap * 0.5 + img * 0.5
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
 
-            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
-
-    return crf_label
+    return crf_label, saliency
 
 
 # use this 
@@ -539,7 +693,8 @@ def compute_seg_label_coco(ori_img, cam_label, norm_cam, croppings, name, iter, 
             heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
             img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
             cam_output = heatmap * 0.5 + img * 0.5
-            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
+            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}_heatmap.jpg'.format(coco_classes[target_class]['name'])), cam_output)
+            cv2.imwrite(os.path.join('/home/users/u5876230/ete_project/ete_output/heatmap/', name + '_{}.jpg'.format(coco_classes[target_class]['name'])), mask*255)
 
     output = cls_pred.detach().cpu()
     accuracy = pred_acc(torch.from_numpy(cam_label), output.unsqueeze(0))
@@ -563,7 +718,7 @@ def compute_seg_label_coco(ori_img, cam_label, norm_cam, croppings, name, iter, 
             cam_class = norm_cam[class_i, :,:]
             cam_class_order = cam_class[cam_class > 0]
             cam_class_order = np.sort(cam_class_order)
-            confidence_pos = int(cam_class_order.shape[0] * 0.95)
+            confidence_pos = int(cam_class_order.shape[0] * 0.9)
             if confidence_pos>0:
                 confidence_value = cam_class_order[confidence_pos]
 
@@ -580,11 +735,11 @@ def compute_seg_label_coco(ori_img, cam_label, norm_cam, croppings, name, iter, 
     frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
     crf_label[frg_dilate!=255] = 0
     
-    cv2.imwrite('/home/users/u5876230/ete_project/pseudo_label/{}.png'.format(name), crf_label)
+    # cv2.imwrite('/home/users/u5876230/ete_project/pseudo_label/{}.png'.format(name), crf_label)
 
-    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
-    cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
-                        (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
+    # rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
+    #                     (rgb_pseudo_label * 255).astype('uint8') * 0.5 + ori_img * 0.5)
 
     # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}.png'.format(name),
     #                     (saliency).astype('uint8'))
@@ -902,6 +1057,29 @@ def hide_patch(img):
 
     return img
 
+# sobel folter
+def get_gradient(img):
+    P=transforms.Compose([transforms.ToPILImage()])
+    x = transforms.Grayscale()(img)
+
+    a=np.array([[3, 0, -3],[6,0,-6],[3,0,-3]])
+    conv1=torch.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False)
+    conv1.weight=torch.nn.Parameter(torch.from_numpy(a).float().unsqueeze(0).unsqueeze(0))
+    G_x=conv1(Variable(x)).data.view(x.shape[0],x.shape[2],x.shape[3])
+
+    b=np.array([[3, 6, 3],[0,0,0],[-3,-6,-3]])
+    conv2=torch.nn.Conv2d(1, 1, kernel_size=3, stride=1, padding=1, bias=False)
+    conv2.weight=torch.nn.Parameter(torch.from_numpy(b).float().unsqueeze(0).unsqueeze(0))
+    G_y=conv2(Variable(x)).data.view(x.shape[0],x.shape[2],x.shape[3])
+
+    G=torch.sqrt(torch.pow(G_x,2)+ torch.pow(G_y,2))
+    
+    X = P(G[0])
+    X.save('grad.png')
+    
+    return G
+
+
 def get_data_from_chunk_v2(chunk, args):
     img_path = args.IMpath
 
@@ -910,9 +1088,14 @@ def get_data_from_chunk_v2(chunk, args):
     images = np.zeros((dim, dim, 3, len(chunk)))
     ori_images = np.zeros((dim, dim, 3, len(chunk)),dtype=np.uint8)
     croppings = np.zeros((dim, dim, len(chunk)))
+    hog_maps = np.zeros((dim, dim, len(chunk)))
     labels = load_image_label_list_from_npy(chunk)
     labels = torch.from_numpy(np.array(labels))
+    image = cv2.imread("test.jpg",0)
+    canny_filter = CannyFilter()
+    # P=transforms.Compose([transforms.ToPILImage()])
 
+    
     name_list = []
 
     for i, piece in enumerate(chunk):
@@ -928,10 +1111,16 @@ def get_data_from_chunk_v2(chunk, args):
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
         img_temp, cropping = RandomCrop(img_temp, dim)
         # img_temp = hide_patch(img_temp)
+
+        # print(img_temp.shape)
+        # hog_map = hog.compute(img_temp.astype('uint8'))
+        # print(hog_map.shape)
+
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
         ori_temp[:, :, 1] = (img_temp[:, :, 1] * 0.224 + 0.456) * 255.
         ori_temp[:, :, 2] = (img_temp[:, :, 2] * 0.225 + 0.406) * 255.
+
         ori_images[:, :, :, i] = ori_temp.astype(np.uint8)
         croppings[:,:,i] = cropping.astype(np.float32)
 
@@ -940,7 +1129,22 @@ def get_data_from_chunk_v2(chunk, args):
     images = images.transpose((3, 2, 0, 1))
     ori_images = ori_images.transpose((3, 2, 0, 1))
     images = torch.from_numpy(images).float()
-    return images, ori_images, labels, croppings, name_list
+    
+    # print(images.shape)
+    # grad = get_gradient(images)
+    # print(images)
+
+    # for high in range(1,10,1):
+    #     for low in range(1,10,1):
+    #         _,_,_,_,_,grad = canny_filter(images, low/10, high/10, False)
+    #         X = P(grad[0])
+    #         X.save('grad/{}_{}_{}.png'.format(name_list[0], low, high))
+    
+    _,_,_,_,_,grad = canny_filter(images, 0.8, 0.8, False)
+    
+    # print(torch.unique(grad))
+
+    return images, ori_images, labels, croppings, name_list, grad
 
 
 def get_data_from_chunk_v3(chunk, args):
@@ -956,6 +1160,8 @@ def get_data_from_chunk_v3(chunk, args):
     croppings = np.zeros((dim, dim, len(chunk)))
     labels = load_image_label_list_from_npy(chunk)
     labels = torch.from_numpy(np.array(labels))
+
+    hog = cv2.HOGDescriptor()
 
     name_list = []
 
@@ -1120,18 +1326,18 @@ def get_data_from_chunk_val(chunk, args):
 
     for i, piece in enumerate(chunk):
         name_list.append(piece)
-        flip_p = np.random.uniform(0, 1)
+        # flip_p = np.random.uniform(0, 1)
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
         # img_temp = scale_im(img_temp, scale)
 
-        img_temp = RandomResizeLong(img_temp, int(dim), int(dim/0.875))
-        # img_temp =  cv2.resize(img_temp, (256,256))
+        # img_temp = RandomResizeLong(img_temp, int(dim), int(dim/0.875))
+        img_temp =  cv2.resize(img_temp, (dim, dim))
 
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
-        img_temp, cropping = CenterCrop(img_temp, dim)
+        # img_temp, cropping = CenterCrop(img_temp, dim)
 
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
@@ -1149,7 +1355,7 @@ def get_data_from_chunk_val(chunk, args):
 
 
 
-classes = [{"supercategory": "person", "id": 1, "name": "person"}, # 一共80类
+coco_classes = [{"supercategory": "person", "id": 1, "name": "person"}, # 一共80类
                {"supercategory": "vehicle", "id": 2, "name": "bicycle"},
                {"supercategory": "vehicle", "id": 3, "name": "car"},
                {"supercategory": "vehicle", "id": 4, "name": "motorcycle"},
@@ -1230,8 +1436,10 @@ classes = [{"supercategory": "person", "id": 1, "name": "person"}, # 一共80类
                {"supercategory": "indoor", "id": 89, "name": "hair drier"},
                {"supercategory": "indoor", "id": 90, "name": "toothbrush"}]
 
+
+
 cls_dict = {}
-for index, item in enumerate(classes):
+for index, item in enumerate(coco_classes):
     category_id = item['id']
     cls_dict[category_id] = index
 
@@ -1284,7 +1492,7 @@ def get_data_from_chunk_coco(chunk, args):
         flip_p = np.random.uniform(0, 1)
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
-        saliency_map_path = os.path.join('/home/users/u5876230/swin_sod/coco_saliency/', '{}.png'.format(piece))
+        saliency_map_path = os.path.join('/home/users/u5876230/coco/coco_saliency/coco_saliency/', '{}.png'.format(piece))
         saliency_map = PIL.Image.open(saliency_map_path)
         saliency_map = np.asarray(saliency_map)
         # print(saliency_map.shape)
@@ -1317,6 +1525,53 @@ def get_data_from_chunk_coco(chunk, args):
 
 
     return images, ori_images, labels, croppings, name_list, saliency
+
+
+def get_data_from_chunk_coco_val(chunk, args):
+    # print(chunk)
+    img_path = args.IMpath
+
+    scale = np.random.uniform(0.7, 1.3)
+
+    dim = args.crop_size
+    images = np.zeros((dim, dim, 3, len(chunk)))
+
+    ori_images = np.zeros((dim, dim, 3, len(chunk)),dtype=np.uint8)
+    labels = []
+    name_list = []
+
+    for i, piece in enumerate(chunk):
+        piece = piece.split('.')[0]
+        cls_label = get_coco_cls_label(piece)
+        assert(np.sum(cls_label)>0)
+
+        # print(cls_label)
+        labels.append(cls_label)
+
+        name_list.append(piece)
+        img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
+        img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
+
+        img_temp =  cv2.resize(img_temp, (256,256))
+
+        img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
+        img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
+        img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
+
+        ori_temp = np.zeros_like(img_temp)
+        ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
+        ori_temp[:, :, 1] = (img_temp[:, :, 1] * 0.224 + 0.456) * 255.
+        ori_temp[:, :, 2] = (img_temp[:, :, 2] * 0.225 + 0.406) * 255.
+        ori_images[:, :, :, i] = ori_temp.astype(np.uint8)
+
+        images[:, :, :, i] = img_temp
+
+    images = images.transpose((3, 2, 0, 1))
+    ori_images = ori_images.transpose((3, 2, 0, 1))
+    images = torch.from_numpy(images).float()
+    labels = torch.from_numpy(np.array(labels))
+
+    return images, ori_images, labels,  name_list
 
 
 
@@ -1427,12 +1682,15 @@ def decode_segmap(label_mask, dataset, plot=False):
     Returns:
         (np.ndarray, optional): the resulting decoded color image.
     """
-    if dataset == 'pascal' or dataset == 'coco':
+    if dataset == 'pascal':
         n_classes = 21
         label_colours = get_pascal_labels()
     elif dataset == 'cityscapes':
         n_classes = 19
         label_colours = get_cityscapes_labels()
+    elif dataset == 'coco':
+        n_classes = 81
+        label_colours = get_coco_labels()
     else:
         raise NotImplementedError
 
@@ -1481,6 +1739,28 @@ def get_cityscapes_labels():
         [0, 0, 230],
         [119, 11, 32]])
 
+def get_coco_labels():
+    return np.array([
+        [128, 64, 128],
+        [244, 35, 232],
+        [70, 70, 70],
+        [102, 102, 156],
+        [190, 153, 153],
+        [153, 153, 153],
+        [250, 170, 30],
+        [220, 220, 0],
+        [107, 142, 35],
+        [152, 251, 152],
+        [0, 130, 180],
+        [220, 20, 60],
+        [255, 0, 0],
+        [0, 0, 142],
+        [0, 0, 70],
+        [0, 60, 100],
+        [0, 80, 100],
+        [0, 0, 230],
+        [119, 11, 32]])
+
 
 def get_pascal_labels():
     """Load the mapping that associates pascal classes with label colors
@@ -1498,7 +1778,7 @@ def get_pascal_labels():
 from PIL import Image
 from tool.metrics import Evaluator
 
-def _crf_with_alpha(pred_prob, ori_img):
+def _crf_with_alpha_2(pred_prob, ori_img):
     bgcam_score = pred_prob.cpu().data.numpy()
     crf_score = imutils.crf_inference_inf(ori_img, bgcam_score, labels=21)
 
@@ -1510,13 +1790,12 @@ def validation(model, use_crf=False):
     evaluator = Evaluator(num_class=21) 
 
     im_path = "/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages"
-    img_list = open('voc12/val(id).txt').readlines()
+    img_list = open('voc12/val_id.txt').readlines()
     pred_softmax = torch.nn.Softmax(dim=0)
     with torch.no_grad():
         for index, i in enumerate(img_list):
             # print(index)
             # i = ((i.split('/'))[2])[0:-4]
-
 
             # print(os.path.join(im_path, i[:-1] + '.jpg'))
             img_temp = cv2.imread(os.path.join(im_path, i[:-1] + '.jpg'))
@@ -1548,7 +1827,7 @@ def validation(model, use_crf=False):
 
             input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
-            _, output= model(input)
+            _, output, _= model(input)
 
             # output = output[]
             # print(output.shape)
@@ -1565,7 +1844,7 @@ def validation(model, use_crf=False):
 
             
             if use_crf:
-                crf_la = _crf_with_alpha(pred_prob, img_original)
+                crf_la = _crf_with_alpha_2(pred_prob, img_original)
                 crf_img = np.argmax(crf_la, 0)
                 evaluator.add_batch(target, crf_img)
             else:

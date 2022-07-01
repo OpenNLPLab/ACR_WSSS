@@ -1,8 +1,8 @@
+from numpy.core.numeric import roll
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import cv2
 
 
 def compute_rollout_attention(all_layer_matrices, start_layer=0):
@@ -14,11 +14,27 @@ def compute_rollout_attention(all_layer_matrices, start_layer=0):
     all_layer_matrices = [all_layer_matrices[i] + eye for i in range(len(all_layer_matrices))]
     # all_layer_matrices = [all_layer_matrices[i] / all_layer_matrices[i].sum(dim=-1, keepdim=True)
     #                       for i in range(len(all_layer_matrices))]
+
     joint_attention = all_layer_matrices[start_layer]
     for i in range(start_layer+1, len(all_layer_matrices)):
         joint_attention = all_layer_matrices[i].bmm(joint_attention)
     return joint_attention
 
+
+def compute_rollout_attention_2(all_layer_matrices, start_layer=0):
+    # adding residual consideration
+    num_tokens = all_layer_matrices[0].shape[1]
+    batch_size = all_layer_matrices[0].shape[0]
+
+    eye = torch.eye(num_tokens).expand(batch_size, num_tokens, num_tokens).to(all_layer_matrices[0].device)
+    all_layer_matrices = [all_layer_matrices[i] + eye for i in range(len(all_layer_matrices))]
+    # all_layer_matrices = [all_layer_matrices[i] / all_layer_matrices[i].sum(dim=-1, keepdim=True)
+    #                       for i in range(len(all_layer_matrices))]
+
+    joint_attention = all_layer_matrices[start_layer]
+    for i in range(start_layer+1, len(all_layer_matrices)):
+        joint_attention = all_layer_matrices[i]*(joint_attention)
+    return joint_attention
 
 class Flatten(nn.Module):
     def forward(self, x):
@@ -107,6 +123,7 @@ class SELayer(nn.Module):
         b, c, _, _ = x.size()
         y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
+        # print(x.shape, y.shape)
         at_x = x * y.expand_as(x)
         return at_x + raw_x
 
@@ -163,7 +180,7 @@ class DPT(BaseModel):
         head,
         features=256,
         backbone='vitb_rn50_384',
-        readout="project",
+        readout="ignore",
         channels_last=False,
         use_bn=False,
         enable_attention_hooks=False,
@@ -205,8 +222,19 @@ class DPT(BaseModel):
         # self.cam_module = CBAM(gate_channels=256)
         self.scratch.output_conv = head
 
+        # self.embedding_layer = nn.Sequential(
+        #         nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0, bias=False),
+        #         nn.BatchNorm2d(256),
+        #         nn.ReLU())
+
+
         # classification head
         self.cls_head = nn.Linear(768, self.num_class)
+        # self.classifier = nn.Conv2d(768, self.num_class, kernel_size=1, bias=False)
+
+
+        self.use_gap = True
+
 
     def forward(self, x):
         raw_x = x
@@ -216,9 +244,37 @@ class DPT(BaseModel):
 
         layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
 
-        x_cls = layer_4.clone()
-        x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
-        x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+        # x_cls = layer_4.clone()
+        # x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
+        # x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+
+        x_cls = self.cls_head(x_cls)
+
+        layer_1_rn = self.scratch.layer1_rn(layer_1)
+        layer_2_rn = self.scratch.layer2_rn(layer_2)
+        layer_3_rn = self.scratch.layer3_rn(layer_3)
+        layer_4_rn = self.scratch.layer4_rn(layer_4)
+
+        path_4 = self.scratch.refinenet4(layer_4_rn)
+        path_3 = self.scratch.refinenet3(path_4, layer_3_rn)
+        path_2 = self.scratch.refinenet2(path_3, layer_2_rn)
+        path_1 = self.scratch.refinenet1(path_2, layer_1_rn)
+        
+        path_1 = self.cam_module(path_1)
+        out = self.scratch.output_conv(path_1)
+
+        # path_1_feature = path_1.clone()
+        # high_img_feature = self.embedding_layer(path_1_feature)
+
+        return x_cls, out, path_1
+    
+    def forward_seg(self,x):
+        raw_x = x
+        x_size = x.size()
+        if self.channels_last == True:
+            x.contiguous(memory_format=torch.channels_last)
+
+        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
 
         # x_cls = self.cls_head(x_cls)
 
@@ -236,47 +292,107 @@ class DPT(BaseModel):
 
         out = self.scratch.output_conv(path_1)
 
-        return x_cls, out
+        return out
 
     def forward_cls(self, x):
-        x_size = x.size()
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        layer_1, layer_2, layer_3, layer_4, _, _ = forward_vit(self.pretrained, x)
+        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
+        
+        # x_cls = layer_4.clone()
+        # if self.use_gap:
+        #     patch_cls = F.avg_pool2d(layer_4, kernel_size=(layer_4.size(2), layer_4.size(3)), padding=0)
+        # else:
+        #     patch_cls = F.max_pool2d(layer_4, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
+        # # x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+        # x_cls = self.classifier(x_cls)
+        # x_cls = x_cls.view(-1, self.num_class)
 
-        x_cls = layer_4.clone()
-        x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
-        x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
-        # x_cls = self.cls_head(x_cls)
+        x_cls = self.cls_head(x_cls)
 
-        return x_cls
+        attn_list = []
+        for blk in self.pretrained.model.blocks:
+            attn = blk.attn.get_attn()
+            # print(attn.shape)
+            attn = torch.mean(attn, dim=1)
+            # print(attn.shape)
+            attn_list.append(attn)
+
+        cls_attn_sum = torch.stack(attn_list, dim=1)
+        # print('cls_attn_sum', cls_attn_sum.shape)
+        # cls_attn_sum = cls_attn_sum.sum(dim=1)
+
+        return x_cls, cls_attn_sum
+
+        # get attention map
+        # cams = []
+        # cls_attn_list = []
+        # for blk in self.pretrained.model.blocks:
+        #     cam = blk.attn.get_attn()
+        #     # print(cam.)
+        #     cam = torch.mean(cam, dim=1)
+        #     cls_attn = cam[:, 0, 1:]
+        #     cls_attn = cls_attn.reshape(-1, 16, 16)
+        #     cls_attn_list.append(cls_attn)
+        # cls_attn_sum = torch.stack(cls_attn_list, dim=1)
+        # cls_attn_sum = cls_attn_sum.sum(dim=1)
+
+        # return x_cls, cls_attn_sum
 
     def forward_cam(self, x):
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        layer_1, layer_2, layer_3, layer_4, _, _ = forward_vit(self.pretrained, x)
+        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
         
-        x_cls = layer_4.clone()
-        x_cls = F.avg_pool2d(x_cls, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
-        x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
-        # x_cls = self.cls_head(x_cls)
+        # x_cls = layer_4.clone()
+        # if self.use_gap:
+        #     x_cls = F.avg_pool2d(layer_4, kernel_size=(layer_4.size(2), layer_4.size(3)), padding=0)
+        # else:
+        #     x_cls = F.max_pool2d(layer_4, kernel_size=(x_cls.size(2), x_cls.size(3)), padding=0)
+        # # x_cls = self.cls_head(x_cls.squeeze(3).squeeze(2))
+        # x_cls = self.classifier(x_cls)
+        # x_cls = x_cls.view(-1, self.num_class)
 
-        x_cam = layer_4.clone()
-        cam = self.cls_head(x_cam.permute(0,2,3,1))
-        cam = cam.permute(0,3,1,2)
-        cam = F.relu(cam)
+        x_cls = self.cls_head(x_cls)
+
+
+        # get attention map
+        cls_attn_list = []
+        for blk in self.pretrained.model.blocks:
+            cam = blk.attn.get_attn()
+            cam = torch.mean(cam, dim=1)
+            print(cam.shape)
+            cls_attn = cam[:, 0, 1:]
+            print(cls_attn.shape)
+            cls_attn = cls_attn.reshape(-1, 16, 16)
+            print(cls_attn.shape)
+            cls_attn_list.append(cls_attn)
+        cls_attn_sum = torch.stack(cls_attn_list)
         
-        return x_cls, cam
+        # .sum(dim=0)
+        print(cls_attn_sum.shape)
+
+        # cam = F.conv2d(layer_4, self.classifier.weight).detach()
+        # print(cam.shape)
+
+        # x_cam = layer_4.clone()
+        # cam = self.cls_head(x_cam.permute(0,2,3,1))
+        # cam = cam.permute(0,3,1,2)
+        # cam = F.relu(cam)
+        
+        return x_cls, cls_attn_sum
+    
 
 class DPTSegmentationModel(DPT):
-    def __init__(self, num_classes, path=None, **kwargs):
+    def __init__(self, num_classes, backbone_name, path=None, **kwargs):
         self.num_class = num_classes
 
         features = kwargs["features"] if "features" in kwargs else 256
 
         kwargs["use_bn"] = True
+
 
         head = nn.Sequential(
             nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False),
@@ -287,11 +403,48 @@ class DPTSegmentationModel(DPT):
             Interpolate(scale_factor=2, mode="bilinear", align_corners=True),
         )
 
-        super().__init__(head, **kwargs)
+        backbone_dict = {"vitb_hybrid": "vitb_rn50_384",
+            'vitb':"vitb16_384",
+            'deit':'deitb16_384',
+            'deit_distilled':'deitb16_distil_384',
+            'vitl':"vitl16_384",
+        }
+
+        cur_backbone = backbone_dict[backbone_name]
+        self.cur_backbone = cur_backbone
+        print('cur_backbone:', cur_backbone)
+        super().__init__(head, backbone=cur_backbone, **kwargs)
 
         if path is not None:
             self.load(path)
+    
+    def forward_cam_multiscale(self, x):
+        input_size_h = x.size()[2]
+        input_size_w = x.size()[3]
 
+        x2 = F.interpolate(x, size=(int(input_size_h * 1.5), int(input_size_w * 1.5)), mode='bilinear',align_corners=False)
+        x3 = F.interpolate(x, size=(int(input_size_h * 2), int(input_size_w * 2)), mode='bilinear',align_corners=False)
+
+        with torch.enable_grad():
+            x_cls, cam1= super().forward_cam(x)
+        with torch.no_grad():
+            _, cam2 = super().forward_cam(x2)
+            _, cam3 = super().forward_cam(x3)
+
+        cam2 = F.interpolate(cam2, size=(int(cam1.shape[2]), int(cam1.shape[3])), mode='bilinear',align_corners=False)
+        cam3 = F.interpolate(cam3, size=(int(cam1.shape[2]), int(cam1.shape[3])), mode='bilinear',align_corners=False)
+        res_cam = (cam1+cam2+cam3)/3
+        # cam_list = [cam2, cam3, cam1]
+        return x_cls, res_cam
+    
+    def forward_mirror(self, x1, x2):
+        x_cls_1, attn1 = super().forward_cls(x1)
+        x_cls_2, attn2 = super().forward_cls(x2)
+
+        return x_cls_1, x_cls_2, attn1, attn2
+
+    
+    # old method 
     def generate_cam(self, batch, start_layer=0):
         cams = []
         attn_list = []
@@ -303,13 +456,141 @@ class DPTSegmentationModel(DPT):
             grad_list.append(torch.mean(grad, dim = 1))
             cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
             grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
-            cam = grad * cam
+            cam = cam * grad
             cam = cam.clamp(min=0).mean(dim=0)
+            # cam = cam.mean(dim=0)
+
             cams.append(cam.unsqueeze(0))
 
         rollout = compute_rollout_attention(cams, start_layer=start_layer)
         cam = rollout[:, 0, 1:]
-        return cam, attn_list
+        return cam, attn_list, cams
+    
+    # "GETAM" cam * gradient^2
+    def generate_cam_2(self, batch, start_layer=0):
+        cam_list = []
+        attn_list = []
+        grad_list = []
+        for blk in self.pretrained.model.blocks:
+            grad = blk.attn.get_attn_gradients()
+            cam = blk.attn.get_attn()
+            attn_list.append(torch.mean(cam, dim = 1))
+            grad_list.append(torch.mean(grad, dim = 1))
+            cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
+            
+            cam = grad * cam 
+            cam = cam.clamp(min=0).mean(dim=0)
+            
+            positive_grad = grad.clamp(min=0).mean(dim=0)
+            cam = cam * positive_grad
+
+            cam_list.append(cam.unsqueeze(0))
+
+        # rollout = compute_rollout_attention(cams, start_layer=start_layer)
+        cam_list = cam_list[start_layer:]
+        cams = torch.stack(cam_list).sum(dim=0)
+        if self.cur_backbone == 'deitb16_distil_384':
+            cls_cam = torch.relu(cams[:, 0, 2:])
+        else:
+            cls_cam = torch.relu(cams[:, 0, 1:])
+        # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
+        attn_map = torch.relu(cams[:,1:,1:])
+        # print(cls_cam.shape, attn_map.shape)
+
+        return cls_cam, attn_list, cam_list, attn_map
+        
+    # cam * gradient^3
+    def generate_cam_3(self, batch, start_layer=0):
+        cam_list = []
+        attn_list = []
+        grad_list = []
+        for blk in self.pretrained.model.blocks:
+            grad = blk.attn.get_attn_gradients()
+            cam = blk.attn.get_attn()
+            attn_list.append(torch.mean(cam, dim = 1))
+            grad_list.append(torch.mean(grad, dim = 1))
+            cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
+            
+            cam = grad * cam 
+            cam = cam.clamp(min=0).mean(dim=0)
+            
+            positive_grad = grad.clamp(min=0).mean(dim=0)
+            cam = cam * positive_grad
+            cam = cam * positive_grad
+
+            cam_list.append(cam.unsqueeze(0))
+
+        # rollout = compute_rollout_attention(cams, start_layer=start_layer)
+
+        cam_list = cam_list[start_layer:]
+        # print(len(cam_list))
+        cams = torch.stack(cam_list).sum(dim=0)
+        cls_cam = torch.relu(cams[:, 0, 1:])
+        # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
+
+        return cls_cam, attn_list, cam_list
+    
+    # test function
+    def generate_cam_4(self, batch, start_layer=0):
+        cam_list = []
+        attn_list = []
+        grad_list = []
+        for blk in self.pretrained.model.blocks:
+            grad = blk.attn.get_attn_gradients()
+            cam = blk.attn.get_attn()
+            attn_list.append(torch.mean(cam, dim = 1))
+            grad_list.append(torch.mean(grad, dim = 1))
+            cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
+
+            # grad = grad + 0.7
+
+            cam = grad * cam 
+            cam = cam.clamp(min=0).mean(dim=0)
+            
+            positive_grad = grad.clamp(min=0).mean(dim=0)
+            cam = cam * positive_grad
+
+            cam_list.append(cam.unsqueeze(0))
+        
+        rollout = compute_rollout_attention(cam_list, start_layer=start_layer)
+        cam = rollout[:, 0, 1:]
+        return cam, attn_list, cam_list
+
+    # grad_cam
+    def grad_cam(self, batch, start_layer=0):
+        cam_list = []
+        attn_list = []
+        grad_list = []
+        for blk in self.pretrained.model.blocks:
+            grad = blk.attn.get_attn_gradients()
+            cam = blk.attn.get_attn()
+            attn_list.append(torch.mean(cam, dim = 1))
+            grad_list.append(torch.mean(grad, dim = 1))
+            cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
+            
+            grad = grad.mean(dim = (1,2)).unsqueeze(1).unsqueeze(1).unsqueeze(0)
+            cam = cam.unsqueeze(0)
+
+            cam = cam * grad.expand_as(cam)
+            
+            cam = cam.clamp(min=0).mean(dim=0)
+            cam_list.append(cam.mean(dim=0).unsqueeze(0))
+
+        # rollout = cam_list[-1]
+        # rollout = compute_rollout_attention_2(cam_list, start_layer=start_layer)
+        
+        cams = torch.stack(cam_list).sum(dim=0)
+        cls_cam = torch.relu(cams[:, 0, 1:])
+        # cam = rollout[:, 0, 1:]
+
+    
+        return cls_cam, attn_list, cam_list
+
+
 
 
 

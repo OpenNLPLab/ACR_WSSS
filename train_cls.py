@@ -81,43 +81,6 @@ def main():
     args = parser.parse_args()
 
 
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/pseudo/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/heatmap/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/seg_pred/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/saliency_pred/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/refined_saliency/')
-    except:
-        pass
-    try:
-        shutil.rmtree('/home/users/u5876230/ete_project/ete_output/saliency_crop/')
-    except:
-        pass
-    
-    
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/pseudo/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/heatmap/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/seg_pred/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/saliency_pseudo/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/saliency_pred/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/refined_saliency/')
-    os.mkdir('/home/users/u5876230/ete_project/ete_output/saliency_crop/')
 
 
 

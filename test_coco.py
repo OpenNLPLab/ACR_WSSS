@@ -73,7 +73,7 @@ def _crf_with_alpha(pred_prob, ori_img):
 
 if __name__ == '__main__':
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+    os.environ["CUDA_VISIBLE_DEVICES"] = '1'
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default='./netWeights/RRM_final.pth', type=str)
@@ -82,11 +82,12 @@ if __name__ == '__main__':
     parser.add_argument("--out_color", default='./output/result/color', type=str)
     parser.add_argument("--LISTpath", default="./voc12/val(id).txt", type=str)
     parser.add_argument("--IMpath", default="/home/users/u5876230/coco/val2014/", type=str)
-    parser.add_argument("--val", default=False, type=bool)
+    parser.add_argument("--val", default=True, type=bool)
+    parser.add_argument("--backbone", default="vitb_hybrid", type=str)
 
     args = parser.parse_args()
 
-    model = DPTSegmentationModel(num_classes=80)
+    model = DPTSegmentationModel(num_classes=80, backbone_name=args.backbone)
     weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
@@ -96,6 +97,7 @@ if __name__ == '__main__':
     evaluator = Evaluator(num_class=81) 
     im_path = args.IMpath
     img_list = os.listdir('/home/users/u5876230/coco/val2014/')
+    # img_list = os.listdir('/home/users/u5876230/acrv1/coco/val2014/')
 
     print(len(img_list))
     pred_softmax = torch.nn.Softmax(dim=0)
@@ -121,9 +123,7 @@ if __name__ == '__main__':
             seg_mask = get_coco_gt(name, h, w)
             target = seg_mask
 
-
             # print(np.unique(target))
-
 
         test_size = 224
         # container = np.zeros((test_size, test_size, 3), np.float32)
@@ -148,7 +148,6 @@ if __name__ == '__main__':
 
         input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
-
         _, output= model(input)
 
         # output = output[]
@@ -170,11 +169,11 @@ if __name__ == '__main__':
         # print(np.unique(output), np.unique(seg_mask))
 
         save_path = os.path.join(args.out_cam_pred,i[:-1] + '.png')
-        cv2.imwrite(save_path,output.astype(np.uint8))
+        # cv2.imwrite(save_path,output.astype(np.uint8))
         
         if args.out_la_crf is not None:
             pred_prob = pred_prob.cpu().data.numpy()
-            # pred_prob = _crf_with_alpha(pred_prob, img_original)
+            pred_prob = _crf_with_alpha(pred_prob, img_original)
 
             crf_img = np.argmax(pred_prob, 0)
 
@@ -183,15 +182,15 @@ if __name__ == '__main__':
                 mIoU = evaluator.Mean_Intersection_over_Union()
                 print(mIoU)
 
-            imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
+            # imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
 
-            rgb_pred = decode_segmap(crf_img, dataset="pascal")
-            cv2.imwrite(os.path.join(args.out_color, i[:-1] + '.png'),
-                        (rgb_pred * 255).astype('uint8') * 0.7 + img_original* 0.3)
+            # rgb_pred = decode_segmap(crf_img, dataset="pascal")
+            # cv2.imwrite(os.path.join(args.out_color, i[:-1] + '.png'),
+            #             (rgb_pred * 255).astype('uint8') * 0.7 + img_original* 0.3)
             
-            rgb_target = decode_segmap(target, dataset="pascal")
-            cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_gt.png'),
-                        (rgb_target * 255).astype('uint8') * 0.7 + img_original* 0.3)
+            # rgb_target = decode_segmap(target, dataset="pascal")
+            # cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_gt.png'),
+            #             (rgb_target * 255).astype('uint8') * 0.7 + img_original* 0.3)
 
     Acc = evaluator.Pixel_Accuracy()
     Acc_class = evaluator.Pixel_Accuracy_Class()

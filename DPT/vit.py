@@ -110,7 +110,8 @@ def forward_vit(pretrained, x):
     layer_3 = pretrained.activations["3"]
     layer_4 = pretrained.activations["4"]
 
-    x_cls = layer_4[:, 0, :]
+    # print(glob.shape)
+    x_cls = layer_4[:, 0, :] #special token 
 
     layer_1 = pretrained.act_postprocess1[0:2](layer_1)
     layer_2 = pretrained.act_postprocess2[0:2](layer_2)
