@@ -114,10 +114,8 @@ def multilabel_categorical_crossentropy(y_true, y_pred):
     return neg_loss + pos_loss
 
 def main():
-    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=2, type=int)
+    parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--max_epoches", default=10, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
@@ -142,7 +140,7 @@ def main():
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=256, type=int)
     parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
-    parser.add_argument("--IMpath", default="/home/SENSETIME/sunweixuan/pascal/JPEGImages/", type=str)
+    parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
 
     parser.add_argument('-n', '--nodes', default=1,
                         type=int, metavar='N')
@@ -297,13 +295,18 @@ def train(gpu, args):
             # edge loss
             # edge_loss = F.binary_cross_entropy_with_logits(attn1, grad)
 
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)
+            # cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) 
+            # cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)
+
+            cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
+            cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
+
+
 
             # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item())
 
 
-            loss = cls_loss_1 + cls_loss_2 + cls_align_loss*100 + aff_align_loss*100
+            loss = cls_loss_1 + cls_loss_2 + cls_align_loss*1000 + aff_align_loss*1000
 
             writer.add_scalar('cls_align_loss', cls_align_loss.item(), optimizer.global_step)
             writer.add_scalar('aff_align_loss', aff_align_loss.item(), optimizer.global_step)
@@ -367,7 +370,7 @@ def train(gpu, args):
 
                         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
                         cam_output = heatmap * 0.5 + ori_img * 0.5
-                        cv2.imwrite(os.path.join('output/001/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
+                        cv2.imwrite(os.path.join('output/vis/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
 
         if (optimizer.global_step-1)%50 == 0 and gpu == 0:
             cls_loss_list.append(avg_meter.get('loss'))
@@ -399,6 +402,6 @@ def train(gpu, args):
 
 if __name__ == '__main__':
 
-
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     main()
 
