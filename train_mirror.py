@@ -27,6 +27,7 @@ import torch.distributed as dist
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter  
 import visdom
+import network
 
 from timm.models import create_model
 
@@ -167,6 +168,12 @@ def train(gpu, args):
         writer = SummaryWriter('tensorboard/{}'.format(args.session_name))
     
     model = MirrorFormer(num_classes=20, backbone_name=args.backbone) 
+    # model = create_model(
+        # 'vitb_base_Mirrorformer',
+        # pretrained=True,
+        # num_classes=20,
+        # drop_block_rate=None
+    # )
 
     torch.cuda.set_device(gpu)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -257,8 +264,6 @@ def train(gpu, args):
 
             # cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
             # cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
-
-
 
             # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item())
 

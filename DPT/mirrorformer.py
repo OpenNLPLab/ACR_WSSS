@@ -66,6 +66,7 @@ class DPT(BaseModel):
             hooks=hooks[backbone],
             use_readout=readout,
             enable_attention_hooks=enable_attention_hooks,
+            seg = False
         )
         
         # classification head
@@ -81,12 +82,13 @@ class DPT(BaseModel):
 
         # layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
 
-        _, _ = self.pretrained.model.forward_flex(x)
+        _, _ = self.pretrained.model.forward_flex_2(x)
 
         layer_4 = self.pretrained.activations["4"]
 
         x_cls = layer_4[:, 0, :]
-        x_patch = layer_4[:, 1:, :]
+        x_bkg = layer_4[:, 1, :]
+        x_patch = layer_4[:, 2:, :]
 
         # print(layer_4.shape)
         
@@ -104,6 +106,7 @@ class DPT(BaseModel):
 
         x_patch_cls = self.cls_head_2(x_patch_cls)
         x_cls = self.cls_head(x_cls)
+        x_bkg_cls = self.cls_head(x_bkg)
 
         attn_list = []
         for blk in self.pretrained.model.blocks:
@@ -116,9 +119,39 @@ class DPT(BaseModel):
         # cls_attn_sum = cls_attn_sum.sum(dim=1)
 
         return x_cls, x_patch_cls, cls_attn_sum, 
-
-        
     
+
+    def forward_cam(self, x):
+        if self.channels_last == True:
+            x.contiguous(memory_format=torch.channels_last)
+
+        # layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
+
+        _, _ = self.pretrained.model.forward_flex(x)
+
+        layer_4 = self.pretrained.activations["4"]
+
+        x_cls = layer_4[:, 0, :]
+        x_patch = layer_4[:, 1:, :]
+
+        x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
+        # print(x_patch_cls.shape, x_cls.shape)
+
+        x_patch_cls = self.cls_head_2(x_patch_cls)
+        x_cls = self.cls_head(x_cls)
+
+        attn_list = []
+        for blk in self.pretrained.model.blocks:
+            attn = blk.attn.get_attn()
+            attn = torch.mean(attn, dim=1)
+            attn_list.append(attn)
+
+        cls_attn_sum = torch.stack(attn_list, dim=1)
+
+
+        return x_cls, x_patch_cls, cls_attn_sum, 
+    
+
 class MirrorFormer(DPT):
     def __init__(self, num_classes, backbone_name, path=None, **kwargs):
         self.num_class = num_classes

@@ -177,6 +177,9 @@ class VisionTransformer(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
+        # added
+        self.bkg_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.ModuleList([
             Block(
@@ -190,6 +193,9 @@ class VisionTransformer(nn.Module):
 
         trunc_normal_(self.pos_embed, std=.02)
         trunc_normal_(self.cls_token, std=.02)
+
+        trunc_normal_(self.bkg_token, std=.02)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -228,7 +234,7 @@ class VisionTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token'}
+        return {'pos_embed', 'cls_token', 'bkg_token'}
 
     def get_classifier(self):
         return self.head

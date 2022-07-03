@@ -580,7 +580,7 @@ def _make_pretrained_vitl16_384(
 
 
 def _make_pretrained_vitb16_384(
-    pretrained, use_readout="ignore", hooks=None, enable_attention_hooks=False
+    pretrained, use_readout="ignore", hooks=None, enable_attention_hooks=False, seg=True
 ):
     model = create_model("vit_base_patch16_384", pretrained=pretrained)
 
@@ -591,6 +591,7 @@ def _make_pretrained_vitb16_384(
         hooks=hooks,
         use_readout=use_readout,
         enable_attention_hooks=enable_attention_hooks,
+        seg=seg
     )
 
 
