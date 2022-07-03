@@ -13,6 +13,7 @@ from PIL import Image
 from tool import pyutils, imutils, torchutils
 import cv2
 from DPT.DPT import DPTSegmentationModel
+from DPT.mirrorformer import MirrorFormer
 import myTool as mytool
 # from DenseEnergyLoss import DenseEnergyLoss
 # import shutil
@@ -53,7 +54,7 @@ def main():
     parser.add_argument("--wt_dec", default=5e-4, type=float)
     parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
     parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
-    parser.add_argument("--LISTpath", default="'voc12/train.txt'", type=str)
+    parser.add_argument("--LISTpath", default="voc12/train.txt", type=str)
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
     parser.add_argument("--address", default="7777", type=str)
 
@@ -98,7 +99,9 @@ def train(gpu, args):
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
     setup(rank)
 
-    model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
+    # model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
+    model = MirrorFormer(num_classes=20, backbone_name=args.backbone) 
+
     weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
@@ -156,7 +159,7 @@ def train(gpu, args):
                     if hflip==1:
                         img = flipper1(img)
 
-                    cls_pred, _ = model.forward_cls(img)
+                    cls_pred, _, _, _ = model.forward_cls(img)
                     
                     original_img = ori_images[0]
                     cur_label = label[0, :]
@@ -170,9 +173,10 @@ def train(gpu, args):
                 
                             model.zero_grad()
                             one_hot.backward(retain_graph=True)
-                            cam, _, _, _ = model.generate_cam_2(0, start_layer=6)
+                            cam, _, _ = model.getam(0, start_layer=6)
                             
                             cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
+                            
                             
                             cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                             cam_matrix[0, class_index,:,:] = cam
@@ -184,7 +188,6 @@ def train(gpu, args):
                     # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
                     # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
 
-                    # print(cam_up_single.shape)
 
                     cam_up_single = cam_up_single.cpu().data.numpy()
                     
@@ -229,7 +232,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="6"
+    os.environ["CUDA_VISIBLE_DEVICES"]="7"
 
     main()
 

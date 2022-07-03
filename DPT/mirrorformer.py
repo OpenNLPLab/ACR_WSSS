@@ -102,23 +102,26 @@ class DPT(BaseModel):
         # x_cls = x_cls.view(-1, self.num_class)
 
         x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
-        # print(x_patch_cls.shape, x_cls.shape)
-
         x_patch_cls = self.cls_head_2(x_patch_cls)
+
         x_cls = self.cls_head(x_cls)
         x_bkg_cls = self.cls_head(x_bkg)
 
         attn_list = []
         for blk in self.pretrained.model.blocks:
             attn = blk.attn.get_attn()
+
             attn = torch.mean(attn, dim=1)
+
             attn_list.append(attn)
 
         cls_attn_sum = torch.stack(attn_list, dim=1)
+        
         # print('cls_attn_sum', cls_attn_sum.shape)
+        # print(torch.sum(cls_attn_sum, dim=3))
         # cls_attn_sum = cls_attn_sum.sum(dim=1)
 
-        return x_cls, x_patch_cls, cls_attn_sum, 
+        return x_cls, x_patch_cls, cls_attn_sum, x_bkg_cls
     
 
     def forward_cam(self, x):
@@ -195,10 +198,10 @@ class MirrorFormer(DPT):
         return x_cls, res_cam
     
     def forward_mirror(self, x1, x2):
-        x_cls_1, x_p_cls_1, attn1 = super().forward_cls(x1)
-        x_cls_2, x_p_cls_2, attn2 = super().forward_cls(x2)
+        x_cls_1, x_p_cls_1, attn1, x_bkg_cls_1 = super().forward_cls(x1)
+        x_cls_2, x_p_cls_2, attn2, x_bkg_cls_2 = super().forward_cls(x2)
 
-        return x_cls_1, x_cls_2,x_p_cls_1, x_p_cls_2, attn1, attn2
+        return [x_cls_1, x_cls_2,x_p_cls_1, x_p_cls_2, x_bkg_cls_1, x_bkg_cls_2], [attn1, attn2]
 
     # "GETAM" cam * gradient^2
     def getam(self, batch, start_layer=0):
@@ -225,14 +228,14 @@ class MirrorFormer(DPT):
         cam_list = cam_list[start_layer:]
         cams = torch.stack(cam_list).sum(dim=0)
         if self.cur_backbone == 'deitb16_distil_384':
-            cls_cam = torch.relu(cams[:, 0, 2:])
+            cls_cam = torch.relu(cams[:, 0, 3:])
         else:
-            cls_cam = torch.relu(cams[:, 0, 1:])
+            cls_cam = torch.relu(cams[:, 0, 2:])
         # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
-        attn_map = torch.relu(cams[:,1:,1:])
+        # attn_map = torch.relu(cams[:,1:,1:])
         # print(cls_cam.shape, attn_map.shape)
 
-        return cls_cam, attn_list, cam_list, attn_map
+        return cls_cam, attn_list, cam_list
         
 
 

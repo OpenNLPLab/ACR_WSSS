@@ -58,7 +58,7 @@ def validation(model, args, optimizer, writer):
             img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
-            x1,x2,_ = model.module.forward_cls(img)
+            x1, x2, _ ,_ = model.module.forward_cls(img)
             # x, cam = model.module.forward_cam_multiscale(img)
             loss = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x2, label)
             val_loss_meter.add({'loss': loss.item()})
@@ -118,7 +118,7 @@ def multilabel_categorical_crossentropy(y_true, y_pred):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=2, type=int)
+    parser.add_argument("--batch_size", default=4, type=int)
     parser.add_argument("--max_epoches", default=10, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
@@ -216,6 +216,9 @@ def train(gpu, args):
         label = label.cuda(non_blocking=True)
         grad = grad.cuda(non_blocking=True)
 
+        # print(label)
+        bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
+
         img2 = flipper1(img)
         # if np.random.uniform(0, 1)>0.75:
         #     img2 = F.interpolate(img2, \
@@ -228,52 +231,75 @@ def train(gpu, args):
         # img2 = img.clone()
 
         with torch.cuda.amp.autocast(enabled=False):
-            x1, x2, x_p_1, x_p_2, attn1, attn2 = model.module.forward_mirror(img, img2)
+            cls_list, attn_list= model.module.forward_mirror(img, img2)
             # print(attn1.shape, attn2.shape)
             
-            
-            attn1_cls = attn1[:,:,0,1:].unsqueeze(2)
-            attn2_cls = attn2[:,:,0,1:].unsqueeze(2)
+            attn1, attn2 = attn_list[0], attn_list[1]
+            x1, x2 = cls_list[0], cls_list[1]
+            x_p_1, x_p_2 = cls_list[2], cls_list[3]
+            x_b_1, x_b_2 = cls_list[4], cls_list[5]
 
-            attn1_aff = attn1[:,:,1:,1:]
-            attn2_aff = attn2[:,:,1:,1:]
+            # print(torch.sum(attn1, dim=3), torch.sum(attn2, dim=3))
+
+            # print(torch.max(attn1), torch.min(attn1))
+            attn1_cls = attn1[:,:,0,2:].unsqueeze(2)
+            attn2_cls = attn2[:,:,0,2:].unsqueeze(2)
+
+            attn1_bkg = attn1[:,:,1,2:].unsqueeze(2)
+            attn2_bkg = attn2[:,:,1,2:].unsqueeze(2)
+
+            attn1_aff = attn1[:,:,2:,2:]
+            attn2_aff = attn2[:,:,2:,2:]
+
+            # print(attn1_bkg.shape)
             
             p=16 # patch size
 
             for i in range(p):
                 attn2_cls[:,:,:,i*p:i*p+p] = attn2_cls[:,:,:,i*p:i*p+p].flip(3)
-            
+                attn2_bkg[:,:,:,i*p:i*p+p] = attn2_bkg[:,:,:,i*p:i*p+p].flip(3)
+
             for i in range(p):                              
                 attn2_aff[:,:,i*p:i*p+p,:] = attn2_aff[:,:,i*p:i*p+p,:].flip(2)
             
             for i in range(p):
                 attn2_aff[:,:,:,i*p:i*p+p] = attn2_aff[:,:,:,i*p:i*p+p].flip(3)
 
-            
             cls_align_loss = F.l1_loss(attn1_cls, attn2_cls, reduction='mean')
             aff_align_loss = F.l1_loss(attn1_aff, attn2_aff, reduction='mean')
-            # print(cls_align_loss.item(), aff_align_loss.item())
+            bkg_align_loss = F.l1_loss(attn1_bkg, attn2_bkg, reduction='mean')
 
-        
+            # intra_frg_bkg_loss 
+            intra_frg_bkg_loss = F.l1_loss(attn1_cls,  torch.softmax(1 - attn1_bkg, dim=3), reduction='mean') + \
+                                    F.l1_loss(attn2_cls,  torch.softmax(1 - attn2_bkg, dim=3), reduction='mean')
+            
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + \
+                F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + \
+                F.multilabel_soft_margin_loss(x_p_2, label) 
 
-            # edge loss
-            # edge_loss = F.binary_cross_entropy_with_logits(attn1, grad)
-
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + F.multilabel_soft_margin_loss(x_p_2, label) 
+            bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
+            bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
 
             # cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
             # cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
 
-            # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item())
+            # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item(), intra_frg_bkg_loss.item())
 
-
-            loss = cls_loss_1 + cls_loss_2 + cls_align_loss*1000 + aff_align_loss*1000
+            loss = cls_loss_1 + cls_loss_2 + \
+                cls_align_loss*1000 + aff_align_loss*1000 \
+                    + bkg_loss_1 + bkg_loss_2  \
+                + bkg_align_loss*1000 \
+                + intra_frg_bkg_loss
 
             writer.add_scalar('cls_align_loss', cls_align_loss.item(), optimizer.global_step)
             writer.add_scalar('aff_align_loss', aff_align_loss.item(), optimizer.global_step)
             writer.add_scalar('cls_loss_1', cls_loss_1.item(), optimizer.global_step)
             writer.add_scalar('cls_loss_2', cls_loss_2.item(), optimizer.global_step)
+            writer.add_scalar('bkg_loss_1', bkg_loss_1.item(), optimizer.global_step)
+            writer.add_scalar('bkg_loss_2', bkg_loss_2.item(), optimizer.global_step)
+            writer.add_scalar('bkg_align_loss', bkg_align_loss.item(), optimizer.global_step)
+            writer.add_scalar('intra_frg_bkg_loss', intra_frg_bkg_loss.item(), optimizer.global_step)
             writer.add_scalar('loss', loss.item(), optimizer.global_step)
             
             avg_meter.add({'loss': loss.item()})
@@ -286,7 +312,7 @@ def train(gpu, args):
         getam = True
         if getam:
             model.zero_grad()
-            cls_pred,_, _ = model.module.forward_cls(img)
+            cls_pred,_, _,_ = model.module.forward_cls(img)
             b,c,h,w = img.shape
 
             cam_matrix = torch.zeros((b, 20, w, h))
@@ -305,9 +331,9 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _, attn_map = model.module.getam(batch, start_layer=6)
+                        cam, _, _ = model.module.getam(batch, start_layer=6)
                         
-                        attn_map = attn_map / (torch.max(attn_map) + 1e-5)
+                        # attn_map = attn_map / (torch.max(attn_map) + 1e-5)
                         # cam = (cam.unsqueeze(1)@attn_map).squeeze(1) # add affinity 
                         # print(cam.shape)
 
@@ -332,7 +358,7 @@ def train(gpu, args):
 
                         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
                         cam_output = heatmap * 0.5 + ori_img * 0.5
-                        cv2.imwrite(os.path.join('output/vis2/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
+                        cv2.imwrite(os.path.join('output/vis/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
 
         if (optimizer.global_step-1)%50 == 0 and gpu == 0:
             cls_loss_list.append(avg_meter.get('loss'))
@@ -364,6 +390,6 @@ def train(gpu, args):
 
 if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    os.environ["CUDA_VISIBLE_DEVICES"]="7"
+    os.environ["CUDA_VISIBLE_DEVICES"]="6"
     main()
 
