@@ -82,6 +82,18 @@ class Attention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+    
+    def get_attn(self):
+        return self.attn_map
+
+    def save_attn(self, attn):
+        self.attn_map = attn
+
+    def save_attn_gradients(self, attn_gradients):
+        self.attn_map_gradients = attn_gradients
+
+    def get_attn_gradients(self):
+        return self.attn_map_gradients
 
 
     def forward(self, x):
@@ -95,6 +107,11 @@ class Attention(nn.Module):
         weights = attn
 
         attn = self.attn_drop(attn)
+
+        if x.requires_grad:
+            self.save_attn(attn)
+            attn.register_hook(self.save_attn_gradients)
+
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
 
         x = self.proj(x)

@@ -11,7 +11,6 @@ categories = ['background', 'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'b
 
 
 
-
 def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type='png', threshold=1.0, printlog=False):
     TP = []
     P = []
@@ -26,6 +25,9 @@ def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type=
             name = name_list[idx]
             if input_type == 'png':
                 predict_file = os.path.join(predict_folder, '%s.png' % name)
+                # print(name)
+                # print(predict_folder)
+                # print('dir:', predict_file)
                 predict = np.array(Image.open(predict_file))  # cv2.imread(predict_file)
             elif input_type == 'npy':
                 predict_file = os.path.join(predict_folder, '%s.npy' % name)
@@ -39,6 +41,7 @@ def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type=
                 predict = np.argmax(tensor, axis=0).astype(np.uint8)
 
             gt_file = os.path.join(gt_folder, '%s.png' % name)
+            # print(gt_file)
             gt = np.array(Image.open(gt_file))
             cal = gt < 255
             mask = (predict == gt) * cal

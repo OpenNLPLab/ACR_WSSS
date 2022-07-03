@@ -14,7 +14,7 @@ import os
 from PIL import Image
 from tool import pyutils, imutils, torchutils
 import cv2
-from DPT.DPT import DPTSegmentationModel
+from DPT.mirrorformer import MirrorFormer
 import myTool as mytool
 # from DenseEnergyLoss import DenseEnergyLoss
 # import shutil
@@ -27,7 +27,7 @@ import torch.distributed as dist
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter  
 import visdom
-import vision_transformer
+
 from timm.models import create_model
 
 # from network.vit import *
@@ -40,7 +40,6 @@ def setup(seed):
     torch.cuda.manual_seed(seed)
     np.random.seed(seed)
     # random.seed(seed)
-
 
 def validation(model, args, optimizer, writer):
     val_list = mytool.read_file('voc12/val_id.txt')
@@ -58,9 +57,9 @@ def validation(model, args, optimizer, writer):
             img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
-            x,_ = model.module.forward_cls(img)
+            x1,x2,_ = model.module.forward_cls(img)
             # x, cam = model.module.forward_cam_multiscale(img)
-            loss = F.multilabel_soft_margin_loss(x, label)
+            loss = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x2, label)
             val_loss_meter.add({'loss': loss.item()})
             writer.add_scalar('val loss', loss.item(), optimizer.global_step)
 
@@ -118,7 +117,7 @@ def multilabel_categorical_crossentropy(y_true, y_pred):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=4, type=int)
+    parser.add_argument("--batch_size", default=2, type=int)
     parser.add_argument("--max_epoches", default=10, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
@@ -128,17 +127,8 @@ def main():
     parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
     parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
     parser.add_argument("--LISTpath", default="voc12/train_aug(id).txt", type=str)
+    parser.add_argument("--address", default="1111", type=str)
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
-    parser.add_argument("--address", default="8889", type=str)
-
-    # parser.add_argument('--densecrfloss', type=float, default=1e-7,
-    #                     metavar='M', help='densecrf loss (default: 0)')
-    # parser.add_argument('--rloss-scale', type=float, default=0.5,
-    #                     help='scale factor for rloss input, choose small number for efficiency, domain: (0,1]')
-    # parser.add_argument('--sigma-rgb', type=float, default=15.0,
-    #                     help='DenseCRF sigma_rgb')
-    # parser.add_argument('--sigma-xy', type=float, default=100,
-    #                     help='DenseCRF sigma_xy')
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=256, type=int)
@@ -176,7 +166,7 @@ def train(gpu, args):
     if rank==0:
         writer = SummaryWriter('tensorboard/{}'.format(args.session_name))
     
-    model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone) 
+    model = MirrorFormer(num_classes=20, backbone_name=args.backbone) 
 
     torch.cuda.set_device(gpu)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -231,7 +221,7 @@ def train(gpu, args):
         # img2 = img.clone()
 
         with torch.cuda.amp.autocast(enabled=False):
-            x1, x2, attn1, attn2 = model.module.forward_mirror(img, img2)
+            x1, x2, x_p_1, x_p_2, attn1, attn2 = model.module.forward_mirror(img, img2)
             # print(attn1.shape, attn2.shape)
             
             
@@ -262,8 +252,8 @@ def train(gpu, args):
             # edge loss
             # edge_loss = F.binary_cross_entropy_with_logits(attn1, grad)
 
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
             # cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
@@ -291,7 +281,7 @@ def train(gpu, args):
         getam = True
         if getam:
             model.zero_grad()
-            cls_pred, _ = model.module.forward_cls(img)
+            cls_pred,_, _ = model.module.forward_cls(img)
             b,c,h,w = img.shape
 
             cam_matrix = torch.zeros((b, 20, w, h))
@@ -310,7 +300,7 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _, attn_map = model.module.generate_cam_2(batch, start_layer=6)
+                        cam, _, _, attn_map = model.module.getam(batch, start_layer=6)
                         
                         attn_map = attn_map / (torch.max(attn_map) + 1e-5)
                         # cam = (cam.unsqueeze(1)@attn_map).squeeze(1) # add affinity 
@@ -337,7 +327,7 @@ def train(gpu, args):
 
                         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
                         cam_output = heatmap * 0.5 + ori_img * 0.5
-                        cv2.imwrite(os.path.join('output/vis/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
+                        cv2.imwrite(os.path.join('output/vis2/', name + '_{}.jpg'.format(classes[cam_class])), cam_output)
 
         if (optimizer.global_step-1)%50 == 0 and gpu == 0:
             cls_loss_list.append(avg_meter.get('loss'))
@@ -355,7 +345,7 @@ def train(gpu, args):
                 'lr: %.4f' % (optimizer.param_groups[0]['lr']))
         torch.distributed.barrier()
 
-        if (optimizer.global_step-1)%3000 == 0:
+        if (optimizer.global_step+1)%3000 == 0:
             print('validating....')
             torch.distributed.barrier()
             validation(model, args, optimizer, writer)
@@ -368,7 +358,7 @@ def train(gpu, args):
         print('model saved!')
 
 if __name__ == '__main__':
-
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ["CUDA_VISIBLE_DEVICES"]="7"
     main()
 
