@@ -5,6 +5,7 @@ new_logs/
 task.sh
 *.npy
 new_logs*
+output/
 
 /data
 /saved_demos

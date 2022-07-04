@@ -21,7 +21,7 @@ from pamr import PAMR
 # import random
 import torch.multiprocessing as mp
 import torch.distributed as dist
-import seaborn as sns
+# import seaborn as sns
 import matplotlib.pyplot as plt
 
 
@@ -170,7 +170,7 @@ def train(gpu, args):
                 
                             model.zero_grad()
                             one_hot.backward(retain_graph=True)
-                            cam, _, _ = model.generate_cam_2(0, start_layer=6)
+                            cam, _, _ , _= model.generate_cam_2(0, start_layer=6)
                             
                             cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
                             
