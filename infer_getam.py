@@ -13,6 +13,7 @@ from PIL import Image
 from tool import pyutils, imutils, torchutils
 import cv2
 from DPT.DPT import DPTSegmentationModel
+from DPT.mirrorformer import MirrorFormer
 import myTool as mytool
 # from DenseEnergyLoss import DenseEnergyLoss
 # import shutil
@@ -42,6 +43,7 @@ def setup(seed):
 def main():
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=1, type=int)
     parser.add_argument("--max_epoches", default=1, type=int)
@@ -52,9 +54,9 @@ def main():
     parser.add_argument("--wt_dec", default=5e-4, type=float)
     parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
     parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
-    parser.add_argument("--LISTpath", default="'voc12/train.txt'", type=str)
+    parser.add_argument("--LISTpath", default="voc12/train.txt", type=str)
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
-    parser.add_argument("--address", default="8889", type=str)
+    parser.add_argument("--address", default="7777", type=str)
 
     parser.add_argument('--densecrfloss', type=float, default=1e-7,
                         metavar='M', help='densecrf loss (default: 0)')
@@ -71,8 +73,8 @@ def main():
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=256, type=int)
-    parser.add_argument("--voc12_root", default='/home/SENSETIME/sunweixuan/pascal/', type=str)
-    parser.add_argument("--IMpath", default="/home/SENSETIME/sunweixuan/pascal/JPEGImages/", type=str)
+    parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
+    parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
 
     parser.add_argument('-n', '--nodes', default=1,
                         type=int, metavar='N')
@@ -97,17 +99,18 @@ def train(gpu, args):
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
     setup(rank)
 
-    model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
+    # model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
+    model = MirrorFormer(num_classes=20, backbone_name=args.backbone) 
+
     weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()
     model.cuda()
 
-    # torch.cuda.set_device(gpu)
-    # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    # model.cuda(gpu)
-    # model.train()
+    # pixel adaptive refine module
+    pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
+
 
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu],output_device=[gpu], find_unused_parameters=True)
 
@@ -137,8 +140,8 @@ def train(gpu, args):
         # img = flipper1(img)
         # ori_images = np.flip(ori_images, axis = 3)
         name = name_list[0]
-        rgb_img = cv2.imread('/home/SENSETIME/sunweixuan/pascal/JPEGImages/{}.jpg'.format(name))
-        # print(rgb_img.shape)
+        rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
+        # rgb_img = cv2.imread('/home/SENSETIME/sunweixuan/pascal/JPEGImages/{}.jpg'.format(name))
         W,H,_ = rgb_img.shape
 
         # generate getam
@@ -156,7 +159,7 @@ def train(gpu, args):
                     if hflip==1:
                         img = flipper1(img)
 
-                    cls_pred, _ = model.forward_cls(img)
+                    cls_pred, _, _, _ = model.forward_cls(img)
                     
                     original_img = ori_images[0]
                     cur_label = label[0, :]
@@ -170,14 +173,24 @@ def train(gpu, args):
                 
                             model.zero_grad()
                             one_hot.backward(retain_graph=True)
+<<<<<<< HEAD
                             cam, _, _ , _= model.generate_cam_2(0, start_layer=6)
+=======
+                            cam, _, _ = model.getam(0, start_layer=6)
+>>>>>>> f488fca992171af95b3b34947be323f6ef453a80
                             
                             cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
+                            
                             
                             cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                             cam_matrix[0, class_index,:,:] = cam
                     
+
                     cam_up_single = cam_matrix[0,:,:,:]
+                    # print(cam_up_single.shape)
+                    rgb_img = rgb_img.transpose(2,0,1)
+                    # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                    # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
 
 
                     cam_up_single = cam_up_single.cpu().data.numpy()
@@ -223,5 +236,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
+    os.environ["CUDA_VISIBLE_DEVICES"]="7"
+
     main()
 

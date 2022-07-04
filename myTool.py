@@ -1095,7 +1095,6 @@ def get_data_from_chunk_v2(chunk, args):
     canny_filter = CannyFilter()
     # P=transforms.Compose([transforms.ToPILImage()])
 
-    
     name_list = []
 
     for i, piece in enumerate(chunk):

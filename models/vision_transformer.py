@@ -198,7 +198,6 @@ class Attention(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
-        # print(attn.shape)
 
         if x.requires_grad:
             self.save_attn(attn)
@@ -300,6 +299,7 @@ class VisionTransformer(nn.Module):
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.bkg_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.dist_token = nn.Parameter(torch.zeros(1, 1, embed_dim)) if distilled else None
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -340,6 +340,7 @@ class VisionTransformer(nn.Module):
                 _init_vit_weights(m, n, head_bias=head_bias, jax_impl=True)
         else:
             trunc_normal_(self.cls_token, std=.02)
+            trunc_normal_(self.bkg_token, std=.02)
             self.apply(_init_vit_weights)
 
 
@@ -349,7 +350,7 @@ class VisionTransformer(nn.Module):
 
     @torch.jit.ignore
     def no_weight_decay(self):
-        return {'pos_embed', 'cls_token', 'dist_token'}
+        return {'pos_embed', 'cls_token', 'dist_token', 'bkg_token'}
 
     def get_classifier(self):
         if self.dist_token is None:
@@ -392,6 +393,54 @@ class VisionTransformer(nn.Module):
             x = self.head(x)
         return x
 
+    # with bkg token
+    def forward_flex_2(self, x):
+        b, c, h, w = x.shape
+        pos_embed = self._resize_pos_embed_2(
+            self.pos_embed, h // self.patch_size[1], w // self.patch_size[0]
+        )
+        B = x.shape[0]
+
+        if hasattr(self.patch_embed, "backbone"):
+            x = self.patch_embed.backbone(x)
+            if isinstance(x, (list, tuple)):
+                x = x[-1]  # last feature if backbone outputs list/tuple of features
+        
+        res_features = x.clone()
+
+        x = self.patch_embed.proj(x)
+        x = x.flatten(2).transpose(1, 2)
+
+        # print(self.dist_token)
+        if hasattr(self, "dist_token") and torch.is_tensor(self.dist_token):
+            cls_tokens = self.cls_token.expand(
+                B, -1, -1
+            )  # stole cls_tokens impl from Phil Wang, thanks
+            dist_token = self.dist_token.expand(B, -1, -1)
+            x = torch.cat((cls_tokens, dist_token, x), dim=1)
+        else:
+            cls_tokens = self.cls_token.expand(
+                B, -1, -1
+            )  # stole cls_tokens impl from Phil Wang, thanks
+            bkg_tokens = self.bkg_token.expand(
+                B, -1, -1
+            )  # stole cls_tokens impl from Phil Wang, thanks
+            # x = torch.cat((cls_tokens, x), dim=1)
+            # x = torch.cat((bkg_tokens, x), dim=1)
+            x = torch.cat((cls_tokens, bkg_tokens, x), dim=1)
+
+        # print(x.shape, pos_embed.shape)
+        x = x + pos_embed
+        x = self.pos_drop(x)
+
+        for blk in self.blocks:
+            x = blk(x)
+
+        x = self.norm(x)
+
+        return x, res_features
+    
+
     def forward_flex(self, x):
         b, c, h, w = x.shape
         pos_embed = self._resize_pos_embed(
@@ -431,6 +480,8 @@ class VisionTransformer(nn.Module):
         x = self.norm(x)
 
         return x, res_features
+    
+
 
     def _resize_pos_embed(self, posemb, gs_h, gs_w):
         posemb_tok, posemb_grid = (
@@ -445,6 +496,25 @@ class VisionTransformer(nn.Module):
         posemb_grid = posemb_grid.permute(0, 2, 3, 1).reshape(1, gs_h * gs_w, -1)
 
         posemb = torch.cat([posemb_tok, posemb_grid], dim=1)
+
+        return posemb
+    
+
+    def _resize_pos_embed_2(self, posemb, gs_h, gs_w):
+        # print(self.start_index)
+        # print(posemb.shape)
+        posemb_tok, posemb_grid = (
+            posemb[:, : self.start_index],
+            posemb[0, self.start_index:],
+        )
+
+        gs_old = int(math.sqrt(len(posemb_grid)))
+
+        posemb_grid = posemb_grid.reshape(1, gs_old, gs_old, -1).permute(0, 3, 1, 2)
+        posemb_grid = F.interpolate(posemb_grid, size=(gs_h, gs_w), mode="bilinear")
+        posemb_grid = posemb_grid.permute(0, 2, 3, 1).reshape(1, gs_h * gs_w, -1)
+
+        posemb = torch.cat([posemb_tok, posemb_tok, posemb_grid], dim=1)
 
         return posemb
 
@@ -489,6 +559,7 @@ def _init_vit_weights(m, n: str = '', head_bias: float = 0., jax_impl: bool = Fa
 def resize_pos_embed(posemb, posemb_new, num_tokens=1):
     # Rescale the grid of position embeddings when loading from state_dict. Adapted from
     # https://github.com/google-research/vision_transformer/blob/00883dd691c63a6830751563748663526e811cee/vit_jax/checkpoint.py#L224
+    # print(posemb.shape, posemb_new.shape, num_tokens)
     _logger.info('Resized position embedding: %s to %s', posemb.shape, posemb_new.shape)
     ntok_new = posemb_new.shape[1]
     if num_tokens:

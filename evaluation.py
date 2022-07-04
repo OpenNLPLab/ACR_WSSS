@@ -5,8 +5,17 @@ from PIL import Image
 import multiprocessing
 import argparse
 
+<<<<<<< HEAD
 categories = ['background','aeroplane','bicycle','bird','boat','bottle','bus','car','cat','chair','cow',
               'diningtable','dog','horse','motorbike','person','pottedplant','sheep','sofa','train','tvmonitor']
+=======
+categories = ['background', 'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow',
+              'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train',
+              'tvmonitor']
+
+
+
+>>>>>>> f488fca992171af95b3b34947be323f6ef453a80
 def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type='png', threshold=1.0, printlog=False):
     TP = []
     P = []
@@ -20,8 +29,16 @@ def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type=
         for idx in range(start,len(name_list),step):
             name = name_list[idx]
             if input_type == 'png':
+<<<<<<< HEAD
                 predict_file = os.path.join(predict_folder,'%s.png'%name)
                 predict = np.array(Image.open(predict_file)) #cv2.imread(predict_file)
+=======
+                predict_file = os.path.join(predict_folder, '%s.png' % name)
+                # print(name)
+                # print(predict_folder)
+                # print('dir:', predict_file)
+                predict = np.array(Image.open(predict_file))  # cv2.imread(predict_file)
+>>>>>>> f488fca992171af95b3b34947be323f6ef453a80
             elif input_type == 'npy':
                 predict_file = os.path.join(predict_folder,'%s.npy'%name)
                 predict_dict = np.load(predict_file, allow_pickle=True).item()
@@ -32,7 +49,12 @@ def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type=
                 tensor[0,:,:] = threshold 
                 predict = np.argmax(tensor, axis=0).astype(np.uint8)
 
+<<<<<<< HEAD
             gt_file = os.path.join(gt_folder,'%s.png'%name)
+=======
+            gt_file = os.path.join(gt_folder, '%s.png' % name)
+            # print(gt_file)
+>>>>>>> f488fca992171af95b3b34947be323f6ef453a80
             gt = np.array(Image.open(gt_file))
             cal = gt<255
             mask = (predict==gt) * cal

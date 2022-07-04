@@ -357,7 +357,6 @@ class DPT(BaseModel):
 
         x_cls = self.cls_head(x_cls)
 
-
         # get attention map
         cls_attn_list = []
         for blk in self.pretrained.model.blocks:
