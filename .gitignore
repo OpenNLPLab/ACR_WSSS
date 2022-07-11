@@ -11,6 +11,8 @@ output/
 /saved_demos
 *.pth
 
+/tensorboard
+
 __pycache__
 /.vscode
 
