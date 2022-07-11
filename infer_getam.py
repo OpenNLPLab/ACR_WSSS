@@ -140,8 +140,8 @@ def train(gpu, args):
         # img = flipper1(img)
         # ori_images = np.flip(ori_images, axis = 3)
         name = name_list[0]
-        rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
-        # rgb_img = cv2.imread('/home/SENSETIME/sunweixuan/pascal/JPEGImages/{}.jpg'.format(name))
+        # rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
+        rgb_img = cv2.imread('/home/SENSETIME/sunweixuan/pascal/JPEGImages/{}.jpg'.format(name))
         W,H,_ = rgb_img.shape
 
         # generate getam
@@ -173,14 +173,17 @@ def train(gpu, args):
                 
                             model.zero_grad()
                             one_hot.backward(retain_graph=True)
-<<<<<<< HEAD
-                            cam, _, _ , _= model.generate_cam_2(0, start_layer=6)
-=======
                             cam, _, _ = model.getam(0, start_layer=6)
->>>>>>> f488fca992171af95b3b34947be323f6ef453a80
                             
                             cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
                             
+                            # print(cam.shape)
+                            
+                            # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
+                            # print(cam.shape)
+                            # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
+
+                            # print(cam.shape)
                             
                             cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                             cam_matrix[0, class_index,:,:] = cam
@@ -201,7 +204,7 @@ def train(gpu, args):
                     cam_list.append(cam_up_single)  
 
             sum_cam = np.sum(cam_list, axis=0)
-            norm_cam = sum_cam / (np.max(sum_cam, (1, 2), keepdims=True) + 1e-5)  
+            norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
             # norm_cam = cv2.resize(norm_cam, (H,W))
 
                         # print(norm_cam.shape)  
@@ -220,7 +223,9 @@ def train(gpu, args):
             if args.out_cam is not None:
                 np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
 
-            ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
+            # ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
+            ori_img = rgb_img.transpose(1,2,0)
+            # print(ori_img.shape, rgb_img.shape)
                     
             for cam_class in range(20):
                 if cur_label[cam_class] > 1e-5:
@@ -236,7 +241,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="7"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
     main()
 

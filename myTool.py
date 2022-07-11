@@ -924,6 +924,7 @@ def RandomCrop2(imgarr, saliency, cropsize):
 def RandomResizeLong(img, min_long, max_long):
     target_long = random.randint(min_long, max_long)
     h,w, c = img.shape
+    # print(h,w)
 
     if w < h:
         target_shape = (int(round(w * target_long / h)), target_long)
@@ -932,7 +933,7 @@ def RandomResizeLong(img, min_long, max_long):
 
     # img = img.resize(target_shape, resample=PIL.Image.CUBIC)
     img = cv2.resize(img, target_shape)
-
+    # print(img.shape)
     return img
 
 def RandomResizeLong2(img,saliency, min_long, max_long):
@@ -984,7 +985,7 @@ def CenterCrop(npimg, cropsize, default_value = 0):
     cropping[cont_top:cont_top + ch, cont_left:cont_left + cw] = 1
 
 
-    return container, cropping
+    return container, cropping, [cont_top, ch, cont_left, cw]
 
 class RandomErasing(object):
     '''
@@ -1041,7 +1042,7 @@ def hide_patch(img):
     grid_sizes=[0,16,32,44,56]
 
     # hiding probability
-    hide_prob = 0.5
+    hide_prob = 0.25
  
     # randomly choose one grid size
     grid_size= grid_sizes[random.randint(0,len(grid_sizes)-1)]
@@ -1091,8 +1092,8 @@ def get_data_from_chunk_v2(chunk, args):
     hog_maps = np.zeros((dim, dim, len(chunk)))
     labels = load_image_label_list_from_npy(chunk)
     labels = torch.from_numpy(np.array(labels))
-    image = cv2.imread("test.jpg",0)
-    canny_filter = CannyFilter()
+    # image = cv2.imread("test.jpg",0)
+    # canny_filter = CannyFilter()
     # P=transforms.Compose([transforms.ToPILImage()])
 
     name_list = []
@@ -1104,6 +1105,7 @@ def get_data_from_chunk_v2(chunk, args):
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
         # img_temp = scale_im(img_temp, scale)
         img_temp = RandomResizeLong(img_temp, int(dim*0.9), int(dim/0.875))
+        # img_temp =  cv2.resize(img_temp, (dim, dim))
         img_temp = flip(img_temp, flip_p)
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
@@ -1111,17 +1113,13 @@ def get_data_from_chunk_v2(chunk, args):
         img_temp, cropping = RandomCrop(img_temp, dim)
         # img_temp = hide_patch(img_temp)
 
-        # print(img_temp.shape)
-        # hog_map = hog.compute(img_temp.astype('uint8'))
-        # print(hog_map.shape)
-
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
         ori_temp[:, :, 1] = (img_temp[:, :, 1] * 0.224 + 0.456) * 255.
         ori_temp[:, :, 2] = (img_temp[:, :, 2] * 0.225 + 0.406) * 255.
 
         ori_images[:, :, :, i] = ori_temp.astype(np.uint8)
-        croppings[:,:,i] = cropping.astype(np.float32)
+        # croppings[:,:,i] = cropping.astype(np.float32)
 
         images[:, :, :, i] = img_temp
 
@@ -1139,11 +1137,11 @@ def get_data_from_chunk_v2(chunk, args):
     #         X = P(grad[0])
     #         X.save('grad/{}_{}_{}.png'.format(name_list[0], low, high))
     
-    _,_,_,_,_,grad = canny_filter(images, 0.8, 0.8, False)
+    # _,_,_,_,_,grad = canny_filter(images, 0.8, 0.8, False)
     
     # print(torch.unique(grad))
 
-    return images, ori_images, labels, croppings, name_list, grad
+    return images, ori_images, labels,  name_list
 
 
 def get_data_from_chunk_v3(chunk, args):
@@ -1330,13 +1328,13 @@ def get_data_from_chunk_val(chunk, args):
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
         # img_temp = scale_im(img_temp, scale)
 
-        # img_temp = RandomResizeLong(img_temp, int(dim), int(dim/0.875))
+        # img_temp = RandomResizeLong(img_temp, int(dim), int(dim))
         img_temp =  cv2.resize(img_temp, (dim, dim))
 
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
-        # img_temp, cropping = CenterCrop(img_temp, dim)
+        # img_temp, cropping, crop_list = CenterCrop(img_temp, dim)
 
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.

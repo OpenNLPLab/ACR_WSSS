@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*- 
+from ast import expr_context
 from curses import flash
 import numpy as np
 import torch
@@ -27,9 +28,11 @@ import torch.distributed as dist
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter  
 import visdom
-import network
+import shutil
+# import network
 
 from timm.models import create_model
+# torch.autograd.set_detect_anomaly(True)
 
 # from network.vit import *
 
@@ -60,7 +63,7 @@ def validation(model, args, optimizer, writer):
             label = label.cuda(non_blocking=True)
             x1, x2, _ ,_ = model.module.forward_cls(img)
             # x, cam = model.module.forward_cam_multiscale(img)
-            loss = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x2, label)
+            loss = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x2, label)
             val_loss_meter.add({'loss': loss.item()})
             writer.add_scalar('val loss', loss.item(), optimizer.global_step)
 
@@ -119,7 +122,7 @@ def multilabel_categorical_crossentropy(y_true, y_pred):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=4, type=int)
-    parser.add_argument("--max_epoches", default=10, type=int)
+    parser.add_argument("--max_epoches", default=15, type=int)
     parser.add_argument("--lr", default=0.01, type=float)
     parser.add_argument("--step_lr", default=False, type=bool)
 
@@ -132,7 +135,7 @@ def main():
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
-    parser.add_argument("--crop_size", default=256, type=int)
+    parser.add_argument("--crop_size", default=384, type=int)
     parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
     parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
 
@@ -145,6 +148,11 @@ def main():
 
     args = parser.parse_args()
 
+    try:
+        shutil.rmtree('tensorboard/{}'.format(args.session_name))
+    except:
+        pass
+    
     try:
         os.mkdir('tensorboard/{}'.format(args.session_name))
     except:
@@ -211,19 +219,21 @@ def train(gpu, args):
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
-        img, ori_images, label, croppings, name_list, grad = mytool.get_data_from_chunk_v2(chunk, args)
+        img, ori_images, label,  name_list = mytool.get_data_from_chunk_v2(chunk, args)
         img = img.cuda(non_blocking=True)
         label = label.cuda(non_blocking=True)
-        grad = grad.cuda(non_blocking=True)
+        # grad = grad.cuda(non_blocking=True)
+        b,c,h,w = img.shape
 
-        # print(label)
         bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
 
         img2 = flipper1(img)
-        # if np.random.uniform(0, 1)>0.75:
+        # scale = np.random.uniform(0, 1)
+
+        # if scale>0.75:
         #     img2 = F.interpolate(img2, \
-        #     (args.crop_size*2, args.crop_size*2), mode='bilinear', align_corners=True)
-        # elif np.random.uniform(0, 1)<0.25:
+        #     (int(args.crop_size*1.5), int(args.crop_size*1.5)), mode='bilinear', align_corners=True)
+        # elif scale<0.25:
         #     img2 = F.interpolate(img2, \
         #     (args.crop_size//2, args.crop_size//2), mode='bilinear', align_corners=True)
 
@@ -232,32 +242,59 @@ def train(gpu, args):
 
         with torch.cuda.amp.autocast(enabled=False):
             cls_list, attn_list= model.module.forward_mirror(img, img2)
-            # print(attn1.shape, attn2.shape)
             
             attn1, attn2 = attn_list[0], attn_list[1]
             x1, x2 = cls_list[0], cls_list[1]
             x_p_1, x_p_2 = cls_list[2], cls_list[3]
             x_b_1, x_b_2 = cls_list[4], cls_list[5]
+            # print(attn1.shape)
+            # if scale>0.75:
+            #     attn2 = F.interpolate(attn2, \
+            #     (attn1.shape[2], attn1.shape[3]), mode='bilinear', align_corners=True)
+            # elif scale<0.25:
+            #     attn2 = F.interpolate(attn2, \
+            #     (attn1.shape[2], attn1.shape[3]), mode='bilinear', align_corners=True)
 
-            # print(torch.sum(attn1, dim=3), torch.sum(attn2, dim=3))
+            attn1_cls = attn1[:,:,0,1:].unsqueeze(2)
+            attn2_cls = attn2[:,:,0,1:].unsqueeze(2)
 
-            # print(torch.max(attn1), torch.min(attn1))
-            attn1_cls = attn1[:,:,0,2:].unsqueeze(2)
-            attn2_cls = attn2[:,:,0,2:].unsqueeze(2)
+            # attn1_bkg = attn1[:,:,1,2:].unsqueeze(2)
+            # attn2_bkg = attn2[:,:,1,2:].unsqueeze(2)
 
-            attn1_bkg = attn1[:,:,1,2:].unsqueeze(2)
-            attn2_bkg = attn2[:,:,1,2:].unsqueeze(2)
+            # visualize bkg and frg
+            if False:
+                cls_token_map = attn1_cls[:,0,0,:].reshape(args.batch_size, 16, 16)
+                bkg_token_map = attn1_bkg[:,0,0,:].reshape(args.batch_size, 16, 16)
+                cls_token_map = F.interpolate(cls_token_map.unsqueeze(1), (256, 256), mode='bilinear', align_corners=True)[:,0,:,:]
+                cls_token_map = cls_token_map.detach().cpu().numpy()
+                bkg_token_map = F.interpolate(bkg_token_map.unsqueeze(1), (256, 256), mode='bilinear', align_corners=True)[:,0,:,:]
+                bkg_token_map = bkg_token_map.detach().cpu().numpy()
 
-            attn1_aff = attn1[:,:,2:,2:]
-            attn2_aff = attn2[:,:,2:,2:]
+                for batch in range(args.batch_size):
+                    name = name_list[batch]
 
-            # print(attn1_bkg.shape)
+                    norm_cam = cls_token_map[batch]
+                    norm_cam = norm_cam/ (np.max(norm_cam, (0, 1), keepdims=True) + 1e-5)
+                    heatmap = cv2.applyColorMap(np.uint8(255 * norm_cam), cv2.COLORMAP_JET)
+                    ori_img = ori_images[batch].transpose(1, 2, 0).astype(np.uint8)
+                    ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                    cls_map = heatmap * 0.5 + ori_img * 0.5
+                    cv2.imwrite(os.path.join('output/attn_map/', name + '_cls.jpg'), cls_map)
+
+                    bkg_cam = bkg_token_map[batch]
+                    bkg_cam = bkg_cam/ (np.max(bkg_cam, (0, 1), keepdims=True) + 1e-5)
+                    bkg_heatmap = cv2.applyColorMap(np.uint8(255 * bkg_cam), cv2.COLORMAP_JET)
+                    bkg_map =bkg_heatmap * 0.5 + ori_img * 0.5
+                    cv2.imwrite(os.path.join('output/attn_map/', name + '_bkg.jpg'), bkg_map)
+
+            attn1_aff = attn1[:,:,1:,1:]
+            attn2_aff = attn2[:,:,1:,1:]
             
-            p=16 # patch size
+            p = h//16 # patch size
 
             for i in range(p):
                 attn2_cls[:,:,:,i*p:i*p+p] = attn2_cls[:,:,:,i*p:i*p+p].flip(3)
-                attn2_bkg[:,:,:,i*p:i*p+p] = attn2_bkg[:,:,:,i*p:i*p+p].flip(3)
+                # attn2_bkg[:,:,:,i*p:i*p+p] = attn2_bkg[:,:,:,i*p:i*p+p].flip(3)
 
             for i in range(p):                              
                 attn2_aff[:,:,i*p:i*p+p,:] = attn2_aff[:,:,i*p:i*p+p,:].flip(2)
@@ -267,19 +304,60 @@ def train(gpu, args):
 
             cls_align_loss = F.l1_loss(attn1_cls, attn2_cls, reduction='mean')
             aff_align_loss = F.l1_loss(attn1_aff, attn2_aff, reduction='mean')
-            bkg_align_loss = F.l1_loss(attn1_bkg, attn2_bkg, reduction='mean')
+            # bkg_align_loss = F.l1_loss(attn1_bkg, attn2_bkg, reduction='mean')
 
             # intra_frg_bkg_loss 
-            intra_frg_bkg_loss = F.l1_loss(attn1_cls,  torch.softmax(1 - attn1_bkg, dim=3), reduction='mean') + \
-                                    F.l1_loss(attn2_cls,  torch.softmax(1 - attn2_bkg, dim=3), reduction='mean')
+            # intra_frg_bkg_loss = 4 - (F.l1_loss(attn1_cls,  attn1_bkg, reduction='mean') + \
+                                    #  F.l1_loss(attn2_cls,  attn2_bkg, reduction='mean'))
             
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + \
-                F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + \
-                F.multilabel_soft_margin_loss(x_p_2, label) 
+            # croppings = torch.from_numpy(croppings).permute(2,0,1).unsqueeze(1)
+            # print(croppings.shape, cls_token_map.shape)
+            # croppings =F.interpolate(croppings, (16, 16), mode='bilinear', align_corners=True)[:,0,:,:]
+            
 
-            bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
-            bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
+            # cls_token_map_1 = attn1_cls[:,0,0,:].reshape(args.batch_size, 16, 16)
+            # bkg_token_map_1 = attn1_bkg[:,0,0,:].reshape(args.batch_size, 16, 16)
+            # # print(croppings.shape, cls_token_map_1.shape)
+            # # cls_token_map_1[croppings==0] = 0 
+            # # bkg_token_map_1[croppings==0] = 0
+
+            # cls_token_map_1 = (cls_token_map_1 - torch.amin(cls_token_map_1, (1, 2), keepdims=True)) / \
+            #     ( torch.amax(cls_token_map_1, (1, 2), keepdims=True) - torch.amin(cls_token_map_1, (1, 2), keepdims=True) + 1e-5)
+            # bkg_token_map_1 = (bkg_token_map_1 - torch.amin(bkg_token_map_1, (1, 2), keepdims=True)) / \
+            #     ( torch.amax(bkg_token_map_1, (1, 2), keepdims=True) - torch.amin(bkg_token_map_1, (1, 2), keepdims=True) + 1e-5)
+            # comp_map_1 = cls_token_map_1 + bkg_token_map_1
+            # # print(torch.mean(cls_token_map_1, (1,2)), torch.mean(bkg_token_map_1, (1,2)))
+
+            # # writer.add_scalar('cls_token_map_mean_1', torch.mean(cls_token_map_1, (0,1,2)).item(), optimizer.global_step)
+            # # writer.add_scalar('bkg_token_map_mean_1', torch.mean(bkg_token_map_1, (0,1,2)).item(), optimizer.global_step)
+
+            # cls_token_map_2 = attn2_cls[:,0,0,:].reshape(args.batch_size, 16, 16)
+            # bkg_token_map_2 = attn2_bkg[:,0,0,:].reshape(args.batch_size, 16, 16)
+            # # cls_token_map_2[croppings==0] = 0 
+            # # bkg_token_map_2[croppings==0] = 0
+            # cls_token_map_2 = (cls_token_map_2 - torch.amin(cls_token_map_2, (1, 2), keepdims=True)) / \
+            #     ( torch.amax(cls_token_map_2, (1, 2), keepdims=True) - torch.amin(cls_token_map_2, (1, 2), keepdims=True) + 1e-5)
+            # bkg_token_map_2 = (bkg_token_map_2 - torch.amin(bkg_token_map_2, (1, 2), keepdims=True)) / \
+            #     ( torch.amax(bkg_token_map_2, (1, 2), keepdims=True) - torch.amin(bkg_token_map_2, (1, 2), keepdims=True) + 1e-5)
+            # comp_map_2 = cls_token_map_2 + bkg_token_map_2
+            # print(torch.mean(cls_token_map_2, (1,2)), torch.mean(bkg_token_map_2, (1,2)))
+
+
+            # writer.add_scalar('cls_token_map_mean_2', torch.mean(cls_token_map_2, (0,1,2)).item(), optimizer.global_step)
+            # writer.add_scalar('bkg_token_map_mean_2', torch.mean(bkg_token_map_2, (0,1,2)).item(), optimizer.global_step)
+
+
+            # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
+
+            
+            
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ \
+               # F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)# + \
+              #  F.multilabel_soft_margin_loss(x_p_2, label) 
+
+            # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
+            # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
 
             # cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
             # cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
@@ -288,18 +366,20 @@ def train(gpu, args):
 
             loss = cls_loss_1 + cls_loss_2 + \
                 cls_align_loss*1000 + aff_align_loss*1000 \
-                    + bkg_loss_1 + bkg_loss_2  \
-                + bkg_align_loss*1000 \
-                + intra_frg_bkg_loss
+                    #  + bkg_loss_1 + bkg_loss_2  \
+                    #    + intra_frg_bkg_loss * 0.1 
+                    # + bkg_align_loss*1000 \
+                        # + bkg_loss_1 + bkg_loss_2  \
+                # + intra_frg_bkg_loss
 
             writer.add_scalar('cls_align_loss', cls_align_loss.item(), optimizer.global_step)
             writer.add_scalar('aff_align_loss', aff_align_loss.item(), optimizer.global_step)
             writer.add_scalar('cls_loss_1', cls_loss_1.item(), optimizer.global_step)
             writer.add_scalar('cls_loss_2', cls_loss_2.item(), optimizer.global_step)
-            writer.add_scalar('bkg_loss_1', bkg_loss_1.item(), optimizer.global_step)
-            writer.add_scalar('bkg_loss_2', bkg_loss_2.item(), optimizer.global_step)
-            writer.add_scalar('bkg_align_loss', bkg_align_loss.item(), optimizer.global_step)
-            writer.add_scalar('intra_frg_bkg_loss', intra_frg_bkg_loss.item(), optimizer.global_step)
+            # writer.add_scalar('bkg_loss_1', bkg_loss_1.item(), optimizer.global_step)
+            # writer.add_scalar('bkg_loss_2', bkg_loss_2.item(), optimizer.global_step)
+            # writer.add_scalar('bkg_align_loss', bkg_align_loss.item(), optimizer.global_step)
+            # writer.add_scalar('intra_frg_bkg_loss', intra_frg_bkg_loss.item(), optimizer.global_step)
             writer.add_scalar('loss', loss.item(), optimizer.global_step)
             
             avg_meter.add({'loss': loss.item()})
@@ -345,7 +425,8 @@ def train(gpu, args):
                 cam_up_single = cam_matrix[batch,:,:,:]
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
-                norm_cam = cam_up_single / (np.max(cam_up_single, (1, 2), keepdims=True) + 1e-5)
+                norm_cam = (cam_up_single - np.min(cam_up_single, (1, 2), keepdims=True)) / \
+                    (np.max(cam_up_single, (1, 2), keepdims=True) - np.min(cam_up_single, (1, 2), keepdims=True) + 1e-5)
 
                 # original_img = original_img.transpose(1,2,0).astype(np.uint8)
                     
@@ -381,6 +462,9 @@ def train(gpu, args):
             torch.distributed.barrier()
             validation(model, args, optimizer, writer)
             model.train()
+            if gpu==0:
+                torch.save(model.module.state_dict(), os.path.join('weight', args.session_name + '_last.pth'))
+                print('model saved!')
         
     torch.distributed.destroy_process_group()
 
@@ -390,6 +474,6 @@ def train(gpu, args):
 
 if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    os.environ["CUDA_VISIBLE_DEVICES"]="6"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
     main()
 

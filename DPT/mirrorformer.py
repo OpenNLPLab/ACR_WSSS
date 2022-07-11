@@ -76,7 +76,8 @@ class DPT(BaseModel):
 
         self.use_gap = True
 
-    def forward_cls(self, x):
+    # with bkg token
+    def forward_cls_2(self, x):
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
@@ -116,13 +117,41 @@ class DPT(BaseModel):
             attn_list.append(attn)
 
         cls_attn_sum = torch.stack(attn_list, dim=1)
-        
+
+
+        # print(cls_attn_sum.shape)
         # print('cls_attn_sum', cls_attn_sum.shape)
         # print(torch.sum(cls_attn_sum, dim=3))
         # cls_attn_sum = cls_attn_sum.sum(dim=1)
 
         return x_cls, x_patch_cls, cls_attn_sum, x_bkg_cls
     
+
+    def forward_cls(self, x):
+        if self.channels_last == True:
+            x.contiguous(memory_format=torch.channels_last)
+
+        _, _ = self.pretrained.model.forward_flex(x)
+        layer_4 = self.pretrained.activations["4"]
+
+        x_cls = layer_4[:, 0, :]
+        x_patch = layer_4[:, 1:, :]
+
+        x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
+        x_patch_cls = self.cls_head_2(x_patch_cls)
+
+        x_cls = self.cls_head(x_cls)
+
+        attn_list = []
+        for blk in self.pretrained.model.blocks:
+            attn = blk.attn.get_attn()
+            attn = torch.mean(attn, dim=1)
+            attn_list.append(attn)
+        cls_attn_sum = torch.stack(attn_list, dim=1)
+
+        x_bkg_cls = None
+
+        return x_cls, x_patch_cls, cls_attn_sum, x_bkg_cls
 
     def forward_cam(self, x):
         if self.channels_last == True:
@@ -178,7 +207,7 @@ class MirrorFormer(DPT):
         if path is not None:
             self.load(path)
     
-    def forward_cam_multiscale(self, x):
+    def forward_cls_multiscale(self, x):
         input_size_h = x.size()[2]
         input_size_w = x.size()[3]
 
@@ -186,16 +215,16 @@ class MirrorFormer(DPT):
         x3 = F.interpolate(x, size=(int(input_size_h * 2), int(input_size_w * 2)), mode='bilinear',align_corners=False)
 
         with torch.enable_grad():
-            x_cls, cam1= super().forward_cam(x)
+            x_cls, x_p_cls, attn1, x_bkg_cls = super().forward_cls(x)
         with torch.no_grad():
-            _, cam2 = super().forward_cam(x2)
-            _, cam3 = super().forward_cam(x3)
+            _, _, attn2, _ = super().forward_cls(x2)
+            _, _, attn3, _ = super().forward_cls(x3)
 
-        cam2 = F.interpolate(cam2, size=(int(cam1.shape[2]), int(cam1.shape[3])), mode='bilinear',align_corners=False)
-        cam3 = F.interpolate(cam3, size=(int(cam1.shape[2]), int(cam1.shape[3])), mode='bilinear',align_corners=False)
-        res_cam = (cam1+cam2+cam3)/3
-        # cam_list = [cam2, cam3, cam1]
-        return x_cls, res_cam
+        cam2 = F.interpolate(cam2, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
+        cam3 = F.interpolate(cam3, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
+        attn = (attn1+attn2+attn3)/3
+
+        return x_cls, x_p_cls, attn, x_bkg_cls
     
     def forward_mirror(self, x1, x2):
         x_cls_1, x_p_cls_1, attn1, x_bkg_cls_1 = super().forward_cls(x1)
@@ -228,12 +257,11 @@ class MirrorFormer(DPT):
         cam_list = cam_list[start_layer:]
         cams = torch.stack(cam_list).sum(dim=0)
         if self.cur_backbone == 'deitb16_distil_384':
-            cls_cam = torch.relu(cams[:, 0, 3:])
-        else:
             cls_cam = torch.relu(cams[:, 0, 2:])
+        else:
+            cls_cam = torch.relu(cams[:, 0, 1:])
         # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
         # attn_map = torch.relu(cams[:,1:,1:])
-        # print(cls_cam.shape, attn_map.shape)
 
         return cls_cam, attn_list, cam_list
         
