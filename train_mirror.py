@@ -352,9 +352,9 @@ def train(gpu, args):
             
             
             cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ \
-               # F.multilabel_soft_margin_loss(x_p_1, label) 
+            # F.multilabel_soft_margin_loss(x_p_1, label) 
             cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)# + \
-              #  F.multilabel_soft_margin_loss(x_p_2, label) 
+            #  F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
             # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
@@ -365,7 +365,7 @@ def train(gpu, args):
             # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item(), intra_frg_bkg_loss.item())
 
             loss = cls_loss_1 + cls_loss_2 + \
-                cls_align_loss*1000 + aff_align_loss*1000 \
+                cls_align_loss*100 + aff_align_loss*100 \
                     #  + bkg_loss_1 + bkg_loss_2  \
                     #    + intra_frg_bkg_loss * 0.1 
                     # + bkg_align_loss*1000 \
@@ -474,6 +474,6 @@ def train(gpu, args):
 
 if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="7"
     main()
 

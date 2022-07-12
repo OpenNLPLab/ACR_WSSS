@@ -141,7 +141,7 @@ def train(gpu, args):
         # ori_images = np.flip(ori_images, axis = 3)
         name = name_list[0]
         # rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
-        rgb_img = cv2.imread('/home/SENSETIME/sunweixuan/pascal/JPEGImages/{}.jpg'.format(name))
+        rgb_img = cv2.imread('{}/{}.jpg'.format(args.IMpath, name))
         W,H,_ = rgb_img.shape
 
         # generate getam

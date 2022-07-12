@@ -118,7 +118,6 @@ class DPT(BaseModel):
 
         cls_attn_sum = torch.stack(attn_list, dim=1)
 
-
         # print(cls_attn_sum.shape)
         # print('cls_attn_sum', cls_attn_sum.shape)
         # print(torch.sum(cls_attn_sum, dim=3))
@@ -179,7 +178,6 @@ class DPT(BaseModel):
             attn_list.append(attn)
 
         cls_attn_sum = torch.stack(attn_list, dim=1)
-
 
         return x_cls, x_patch_cls, cls_attn_sum, 
     
