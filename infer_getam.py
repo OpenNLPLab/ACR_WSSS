@@ -149,17 +149,18 @@ def train(gpu, args):
         multi_scale = True
         cam_list = []
         b,c,h,w = img.shape
-        cam_matrix = torch.zeros((b, 20, W, H))
         if getam:
             for scale in [1]:
-                for hflip in [0]:
+                for hflip in [1,2]:
+                    cam_matrix = torch.zeros((b, 20, W, H))
                     model.zero_grad()
 
-                    img = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
-                    if hflip==1:
-                        img = flipper1(img)
-
-                    cls_pred, _, _, _ = model.forward_cls(img)
+                    input = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
+                    if hflip%2 == 1:
+                        input = flipper1(input)
+                    
+                    cls_pred, _, _, _ = model.forward_cls(input)
+                
                     
                     original_img = ori_images[0]
                     cur_label = label[0, :]
@@ -188,6 +189,8 @@ def train(gpu, args):
                             cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                             cam_matrix[0, class_index,:,:] = cam
                     
+                    # if hflip==1:
+                        # cam_matrix=flipper1(cam_matrix)
 
                     cam_up_single = cam_matrix[0,:,:,:]
                     # print(cam_up_single.shape)
@@ -195,10 +198,10 @@ def train(gpu, args):
                     # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
                     # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
 
-
                     cam_up_single = cam_up_single.cpu().data.numpy()
                     
-                    if hflip==1:
+                    if hflip%2 == 1:
+                        # print(cam_up_single.shape)
                         cam_up_single = np.flip(cam_up_single, axis=2)
                     
                     cam_list.append(cam_up_single)  
@@ -223,8 +226,8 @@ def train(gpu, args):
             if args.out_cam is not None:
                 np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
 
-            # ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
-            ori_img = rgb_img.transpose(1,2,0)
+            ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
+            # ori_img = rgb_img.transpose(1,2,0)
             # print(ori_img.shape, rgb_img.shape)
                     
             for cam_class in range(20):
@@ -234,6 +237,7 @@ def train(gpu, args):
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
 
                     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                    # print(ori_img.shape, heatmap.shape)
                     cam_output = heatmap * 0.5 + ori_img * 0.5
                     cv2.imwrite(os.path.join(args.heatmap, name + '_{}.jpg'.format(classes[cam_class])), cam_output)
 
@@ -241,7 +245,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="6"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
     main()
 
