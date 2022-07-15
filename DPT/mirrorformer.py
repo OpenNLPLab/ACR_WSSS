@@ -205,12 +205,12 @@ class MirrorFormer(DPT):
         if path is not None:
             self.load(path)
     
-    def forward_cls_multiscale(self, x):
+    def forward_multiscale(self, x):
         input_size_h = x.size()[2]
         input_size_w = x.size()[3]
 
-        x2 = F.interpolate(x, size=(int(input_size_h * 1.5), int(input_size_w * 1.5)), mode='bilinear',align_corners=False)
-        x3 = F.interpolate(x, size=(int(input_size_h * 2), int(input_size_w * 2)), mode='bilinear',align_corners=False)
+        x2 = F.interpolate(x, size=(int(input_size_h * 0.5), int(input_size_w * 0.5)), mode='bilinear',align_corners=False)
+        x3 = F.interpolate(x, size=(int(input_size_h * 1.5), int(input_size_w * 1.5)), mode='bilinear',align_corners=False)
 
         with torch.enable_grad():
             x_cls, x_p_cls, attn1, x_bkg_cls = super().forward_cls(x)
@@ -218,8 +218,8 @@ class MirrorFormer(DPT):
             _, _, attn2, _ = super().forward_cls(x2)
             _, _, attn3, _ = super().forward_cls(x3)
 
-        cam2 = F.interpolate(cam2, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
-        cam3 = F.interpolate(cam3, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
+        attn2 = F.interpolate(attn2, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
+        attn3 = F.interpolate(attn3, size=(int(attn1.shape[2]), int(attn1.shape[3])), mode='bilinear',align_corners=False)
         attn = (attn1+attn2+attn3)/3
 
         return x_cls, x_p_cls, attn, x_bkg_cls
@@ -227,6 +227,9 @@ class MirrorFormer(DPT):
     def forward_mirror(self, x1, x2):
         x_cls_1, x_p_cls_1, attn1, x_bkg_cls_1 = super().forward_cls(x1)
         x_cls_2, x_p_cls_2, attn2, x_bkg_cls_2 = super().forward_cls(x2)
+
+        # x_cls_1, x_p_cls_1, attn1, x_bkg_cls_1 = self.forward_multiscale(x1)
+        # x_cls_2, x_p_cls_2, attn2, x_bkg_cls_2 = self.forward_multiscale(x2)
 
         return [x_cls_1, x_cls_2,x_p_cls_1, x_p_cls_2, x_bkg_cls_1, x_bkg_cls_2], [attn1, attn2]
 

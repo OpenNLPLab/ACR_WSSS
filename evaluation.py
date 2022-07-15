@@ -1,3 +1,6 @@
+'''
+python evaluation.py --list /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/ImageSets/SegmentationAug/train.txt --predict_dir /home/users/u5876230/mirror/output/cam_npy/ --gt_dir /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/SegmentationClass --comment haha --type npy --curve True
+'''
 import os
 import pandas as pd
 import numpy as np
@@ -36,7 +39,7 @@ def do_python_eval(predict_folder, gt_folder, name_list, num_cls=21, input_type=
             gt = np.array(Image.open(gt_file))
             cal = gt<255
             mask = (predict==gt) * cal
-      
+
             for i in range(num_cls):
                 P[i].acquire()
                 P[i].value += np.sum((predict==i)*cal)

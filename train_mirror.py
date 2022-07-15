@@ -135,7 +135,7 @@ def main():
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
-    parser.add_argument("--crop_size", default=384, type=int)
+    parser.add_argument("--crop_size", default=256, type=int)
     parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
     parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
 
@@ -228,6 +228,7 @@ def train(gpu, args):
         bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
 
         img2 = flipper1(img)
+
         # scale = np.random.uniform(0, 1)
 
         # if scale>0.75:
@@ -247,7 +248,7 @@ def train(gpu, args):
             x1, x2 = cls_list[0], cls_list[1]
             x_p_1, x_p_2 = cls_list[2], cls_list[3]
             x_b_1, x_b_2 = cls_list[4], cls_list[5]
-            # print(attn1.shape)
+            
             # if scale>0.75:
             #     attn2 = F.interpolate(attn2, \
             #     (attn1.shape[2], attn1.shape[3]), mode='bilinear', align_corners=True)
@@ -349,7 +350,6 @@ def train(gpu, args):
 
             # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
 
-            
             
             cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ \
             # F.multilabel_soft_margin_loss(x_p_1, label) 

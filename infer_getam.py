@@ -52,8 +52,8 @@ def main():
 
     parser.add_argument("--num_workers", default=8, type=int)
     parser.add_argument("--wt_dec", default=5e-4, type=float)
-    parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
-    parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
+    # parser.add_argument("--train_list", default="voc12/train_aug.txt", type=str)
+    # parser.add_argument("--val_list", default="voc12/val(id).txt", type=str)
     parser.add_argument("--LISTpath", default="voc12/train.txt", type=str)
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
     parser.add_argument("--address", default="7777", type=str)
@@ -72,7 +72,7 @@ def main():
 
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
-    parser.add_argument("--crop_size", default=256, type=int)
+    parser.add_argument("--crop_size", default=384, type=int)
     parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
     parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
 
@@ -241,7 +241,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="6"
 
     main()
 
