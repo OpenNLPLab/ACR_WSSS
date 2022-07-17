@@ -159,9 +159,13 @@ def train(gpu, args):
                     if hflip%2 == 1:
                         input = flipper1(input)
                     
-                    cls_pred, _, _, _ = model.forward_cls(input)
+                    cls_pred, _, attn, _ = model.forward_cls(input)
+
+                    patch_aff = attn[:,:,1:,1:]
+                    patch_aff = torch.sum(patch_aff, dim=1)
+                    # print(patch_aff.shape)
                 
-                    
+
                     original_img = ori_images[0]
                     cur_label = label[0, :]
                     output = cls_pred[0, :]
@@ -176,7 +180,15 @@ def train(gpu, args):
                             one_hot.backward(retain_graph=True)
                             cam, _, _ = model.getam(0, start_layer=6)
                             
+                            # print(cam.shape, patch_aff.shape)
+
+                            # patch aff refine
+                            cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                            # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
+                            # print(cam.shape)
+
                             cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
+
                             
                             # print(cam.shape)
                             
@@ -195,8 +207,12 @@ def train(gpu, args):
                     cam_up_single = cam_matrix[0,:,:,:]
                     # print(cam_up_single.shape)
                     rgb_img = rgb_img.transpose(2,0,1)
+
+                    # pamr ---------------------
                     # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
                     # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                    # cam_up_single = cam_up_single[0]
+                    # --------------------------
 
                     cam_up_single = cam_up_single.cpu().data.numpy()
                     
@@ -233,6 +249,8 @@ def train(gpu, args):
             for cam_class in range(20):
                 if cur_label[cam_class] > 1e-5:
                     mask = norm_cam[cam_class,:]
+                    # print(mask.shape)
+
         
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
 
@@ -245,7 +263,7 @@ def train(gpu, args):
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0,1"
 
     main()
 

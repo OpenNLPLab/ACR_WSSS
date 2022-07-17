@@ -351,10 +351,10 @@ def train(gpu, args):
             # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
 
             
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ \
-            # F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)# + \
-            #  F.multilabel_soft_margin_loss(x_p_2, label) 
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + \
+            F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + \
+            F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
             # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
