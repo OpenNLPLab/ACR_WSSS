@@ -156,30 +156,29 @@ class DPT(BaseModel):
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        # layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
-
         _, _ = self.pretrained.model.forward_flex(x)
-
         layer_4 = self.pretrained.activations["4"]
 
         x_cls = layer_4[:, 0, :]
         x_patch = layer_4[:, 1:, :]
 
-        x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
-        # print(x_patch_cls.shape, x_cls.shape)
-
-        x_patch_cls = self.cls_head_2(x_patch_cls)
         x_cls = self.cls_head(x_cls)
+
+        x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
+        x_patch_cls = self.cls_head_2(x_patch_cls)
+
+        x_patch_cam = self.cls_head_2(x_patch)
+        x_patch_cam = F.relu(x_patch_cam)
+
 
         attn_list = []
         for blk in self.pretrained.model.blocks:
             attn = blk.attn.get_attn()
             attn = torch.mean(attn, dim=1)
             attn_list.append(attn)
-
         cls_attn_sum = torch.stack(attn_list, dim=1)
 
-        return x_cls, x_patch_cls, cls_attn_sum, 
+        return x_cls, x_patch_cls, cls_attn_sum, x_patch_cam
     
 
 class MirrorFormer(DPT):

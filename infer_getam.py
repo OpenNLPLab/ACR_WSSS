@@ -159,7 +159,9 @@ def train(gpu, args):
                     if hflip%2 == 1:
                         input = flipper1(input)
                     
-                    cls_pred, _, attn, _ = model.forward_cls(input)
+                    # cls_pred, _, attn, _ = model.forward_cls(input)
+                    cls_pred, _, attn = model.forward_cam(input)
+
 
                     patch_aff = attn[:,:,1:,1:]
                     patch_aff = torch.sum(patch_aff, dim=1)
