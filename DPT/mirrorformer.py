@@ -170,7 +170,6 @@ class DPT(BaseModel):
         x_patch_cam = self.cls_head_2(x_patch)
         x_patch_cam = F.relu(x_patch_cam)
 
-
         attn_list = []
         for blk in self.pretrained.model.blocks:
             attn = blk.attn.get_attn()

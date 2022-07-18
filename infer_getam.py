@@ -1,4 +1,3 @@
-from cv2 import transform
 import numpy as np
 import torch
 from torch.backends import cudnn
@@ -93,7 +92,7 @@ def main():
     #########################################################
 
 def train(gpu, args):
-    vis = visdom.Visdom()
+    # vis = visdom.Visdom()
     rank = args.nr * args.gpus + gpu
     print(rank)
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
@@ -148,6 +147,7 @@ def train(gpu, args):
         getam = True
         multi_scale = True
         cam_list = []
+        patch_cam_list = []
         b,c,h,w = img.shape
         if getam:
             for scale in [1]:
@@ -160,7 +160,15 @@ def train(gpu, args):
                         input = flipper1(input)
                     
                     # cls_pred, _, attn, _ = model.forward_cls(input)
-                    cls_pred, _, attn = model.forward_cam(input)
+                    cls_pred, _, attn, patch_cam = model.forward_cam(input)
+                    patch_cam = patch_cam.permute(0,2,1).reshape(1,20,int((h*scale) //16), int((w*scale) //16))
+                    patch_cam = F.upsample(patch_cam, [W,H], mode='bilinear', align_corners=False)[0]
+                    patch_cam = patch_cam.detach().cpu().numpy() * label.cpu().clone().view(20, 1, 1).numpy()
+                    if hflip%2 == 1:
+                        patch_cam = np.flip(patch_cam, axis=-1)
+
+                    # print(cam.shape)
+                    patch_cam_list.append(patch_cam)
 
 
                     patch_aff = attn[:,:,1:,1:]
@@ -223,9 +231,23 @@ def train(gpu, args):
                         cam_up_single = np.flip(cam_up_single, axis=2)
                     
                     cam_list.append(cam_up_single)  
+            
 
+            # patch cam
+            patch_sum_cam = np.sum(patch_cam_list, axis=0)
+            patch_norm_cam = patch_sum_cam / (np.max(patch_sum_cam, (1, 2), keepdims=True) + 1e-5)
+            # print(patch_norm_cam.shape)
+            patch_cam_dict = {}
+            for cam_class in range(20):
+                if cur_label[cam_class] > 1e-5:
+                    patch_cam_dict[cam_class] = patch_norm_cam[cam_class]
+
+
+
+            # getam
             sum_cam = np.sum(cam_list, axis=0)
             norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
+            # print(norm_cam.shape)
             # norm_cam = cv2.resize(norm_cam, (H,W))
 
                         # print(norm_cam.shape)  
@@ -250,10 +272,9 @@ def train(gpu, args):
                     
             for cam_class in range(20):
                 if cur_label[cam_class] > 1e-5:
-                    mask = norm_cam[cam_class,:]
+                    mask = patch_norm_cam[cam_class,:]
                     # print(mask.shape)
 
-        
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
 
                     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
