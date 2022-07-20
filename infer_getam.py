@@ -242,11 +242,23 @@ def train(gpu, args):
                 if cur_label[cam_class] > 1e-5:
                     patch_cam_dict[cam_class] = patch_norm_cam[cam_class]
 
-
-
             # getam
             sum_cam = np.sum(cam_list, axis=0)
             norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
+            # norm_cam = norm_cam * patch_norm_cam
+            # print(norm_cam.shape)
+            # norm_cam = (norm_cam - np.min(norm_cam, (1, 2), keepdims=True)) / (np.max(norm_cam, (1, 2), keepdims=True) - np.min(norm_cam, (1, 2), keepdims=True) + 1e-5 )  
+
+            
+            
+            concat_cam = np.stack((patch_norm_cam, norm_cam), axis=0)
+            # print(concat_cam.shape)
+
+            # print(np.max(concat_cam, axis=0).shape)
+            concat_cam = np.max(concat_cam, axis=0)
+            # norm_cam[norm_cam>0.3] = concat_cam 
+            np.putmask(norm_cam, norm_cam>0.34, concat_cam)
+
             # print(norm_cam.shape)
             # norm_cam = cv2.resize(norm_cam, (H,W))
 
@@ -273,20 +285,23 @@ def train(gpu, args):
             for cam_class in range(20):
                 if cur_label[cam_class] > 1e-5:
                     mask = patch_norm_cam[cam_class,:]
-                    # print(mask.shape)
-
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-
                     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-                    # print(ori_img.shape, heatmap.shape)
                     cam_output = heatmap * 0.5 + ori_img * 0.5
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}.jpg'.format(classes[cam_class])), cam_output)
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_cam.jpg'.format(classes[cam_class])), cam_output)
+
+                    mask = norm_cam[cam_class,:]
+                    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                    ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                    cam_output = heatmap * 0.5 + ori_img * 0.5
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_getam.jpg'.format(classes[cam_class])), cam_output)
+
 
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0,1"
+    os.environ["CUDA_VISIBLE_DEVICES"]="6,7"
 
     main()
 
