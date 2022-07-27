@@ -41,6 +41,7 @@ def _make_encoder(
             use_vit_only=use_vit_only,
             use_readout=use_readout,
             enable_attention_hooks=enable_attention_hooks,
+            seg = seg
         )
         scratch = _make_scratch(
             [256, 512, 768, 768], features, groups=groups, expand=expand

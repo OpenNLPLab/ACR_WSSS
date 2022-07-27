@@ -1,3 +1,4 @@
+from ast import Name
 import numpy as np
 import torch
 from torch.backends import cudnn
@@ -68,7 +69,10 @@ def main():
     parser.add_argument("--weights", default='./netWeights/RRM_final.pth', type=str)
     parser.add_argument("--out_cam", default='output/cam_npy', type=str)
     parser.add_argument("--heatmap", default='output/baseline', type=str)
-
+    parser.add_argument("--out_la_crf", default=None, type=str)
+    parser.add_argument("--out_ha_crf", default=None, type=str)
+    parser.add_argument("--low_alpha", default=4, type=int)
+    parser.add_argument("--high_alpha", default=32, type=int)
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=384, type=int)
@@ -127,7 +131,7 @@ def train(gpu, args):
     data_gen = mytool.chunker(img_list, 1)
 
     timer = pyutils.Timer("Session started: ")
-
+ 
     for iter in range(max_step):
         print(iter)
         chunk = data_gen.__next__()
@@ -144,158 +148,170 @@ def train(gpu, args):
         W,H,_ = rgb_img.shape
 
         # generate getam
-        getam = True
         multi_scale = True
         cam_list = []
         patch_cam_list = []
         b,c,h,w = img.shape
-        if getam:
-            for scale in [1]:
-                for hflip in [1,2]:
-                    cam_matrix = torch.zeros((b, 20, W, H))
-                    model.zero_grad()
+        for scale in [1]:
+            for hflip in [1,2]:
+                cam_matrix = torch.zeros((b, 20, W, H))
+                model.zero_grad()
 
-                    input = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
-                    if hflip%2 == 1:
-                        input = flipper1(input)
-                    
-                    # cls_pred, _, attn, _ = model.forward_cls(input)
-                    cls_pred, _, attn, patch_cam = model.forward_cam(input)
-                    patch_cam = patch_cam.permute(0,2,1).reshape(1,20,int((h*scale) //16), int((w*scale) //16))
-                    patch_cam = F.upsample(patch_cam, [W,H], mode='bilinear', align_corners=False)[0]
-                    patch_cam = patch_cam.detach().cpu().numpy() * label.cpu().clone().view(20, 1, 1).numpy()
-                    if hflip%2 == 1:
-                        patch_cam = np.flip(patch_cam, axis=-1)
-
-                    # print(cam.shape)
-                    patch_cam_list.append(patch_cam)
-
-
-                    patch_aff = attn[:,:,1:,1:]
-                    patch_aff = torch.sum(patch_aff, dim=1)
-                    # print(patch_aff.shape)
+                input = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
+                if hflip%2 == 1:
+                    input = flipper1(input)
                 
+                # cls_pred, _, attn, _ = model.forward_cls(input)
+                cls_pred, _, attn, patch_cam = model.forward_cam(input)
+                patch_cam = patch_cam.permute(0,2,1).reshape(1,20,int((h*scale) //16), int((w*scale) //16))
+                patch_cam = F.upsample(patch_cam, [W,H], mode='bilinear', align_corners=False)[0]
+                patch_cam = patch_cam.detach().cpu().numpy() * label.cpu().clone().view(20, 1, 1).numpy()
+                if hflip%2 == 1:
+                    patch_cam = np.flip(patch_cam, axis=-1)
 
-                    original_img = ori_images[0]
-                    cur_label = label[0, :]
-                    output = cls_pred[0, :]
-                    for class_index in range(20):
-                        if cur_label[class_index] > 1e-5:
-                            one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-                            one_hot[0, class_index] = 1
-                            one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-                            one_hot = torch.sum(one_hot.cuda() * output)
+                # print(cam.shape)
+                patch_cam_list.append(patch_cam)
+
+                patch_aff = attn[:,:,1:,1:]
+                patch_aff = torch.sum(patch_aff, dim=1)
+                # print(patch_aff.shape)
+            
+                original_img = ori_images[0]
+                cur_label = label[0, :]
+                output = cls_pred[0, :]
+                for class_index in range(20):
+                    if cur_label[class_index] > 1e-5:
+                        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
+                        one_hot[0, class_index] = 1
+                        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+                        one_hot = torch.sum(one_hot.cuda() * output)
+            
+                        model.zero_grad()
+                        one_hot.backward(retain_graph=True)
+                        cam, _, _ = model.getam(0, start_layer=6)
+                        
+                        # print(cam.shape, patch_aff.shape)
+
+                        # patch aff refine
+                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                        # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
+                        # print(cam.shape)
+
+                        cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
+
+                        # print(cam.shape)
+                        
+                        # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
+                        # print(cam.shape)
+                        # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
+
+                        # print(cam.shape)
+                        
+                        cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                        cam_matrix[0, class_index,:,:] = cam
                 
-                            model.zero_grad()
-                            one_hot.backward(retain_graph=True)
-                            cam, _, _ = model.getam(0, start_layer=6)
-                            
-                            # print(cam.shape, patch_aff.shape)
+                # if hflip==1:
+                    # cam_matrix=flipper1(cam_matrix)
 
-                            # patch aff refine
-                            cam = torch.matmul(patch_aff, cam.unsqueeze(2))
-                            # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
-                            # print(cam.shape)
+                cam_up_single = cam_matrix[0,:,:,:]
+                # print(cam_up_single.shape)
+                rgb_img = rgb_img.transpose(2,0,1)
 
-                            cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
+                # pamr ---------------------
+                # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                # cam_up_single = cam_up_single[0]
+                # --------------------------
 
-                            
-                            # print(cam.shape)
-                            
-                            # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
-                            # print(cam.shape)
-                            # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
-
-                            # print(cam.shape)
-                            
-                            cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
-                            cam_matrix[0, class_index,:,:] = cam
-                    
-                    # if hflip==1:
-                        # cam_matrix=flipper1(cam_matrix)
-
-                    cam_up_single = cam_matrix[0,:,:,:]
+                cam_up_single = cam_up_single.cpu().data.numpy()
+                
+                if hflip%2 == 1:
                     # print(cam_up_single.shape)
-                    rgb_img = rgb_img.transpose(2,0,1)
+                    cam_up_single = np.flip(cam_up_single, axis=2)
+                
+                cam_list.append(cam_up_single)  
+        
+        # patch cam
+        patch_sum_cam = np.sum(patch_cam_list, axis=0)
+        patch_norm_cam = patch_sum_cam / (np.max(patch_sum_cam, (1, 2), keepdims=True) + 1e-5)
+        # print(patch_norm_cam.shape)
+        patch_cam_dict = {}
+        for cam_class in range(20):
+            if cur_label[cam_class] > 1e-5:
+                patch_cam_dict[cam_class] = patch_norm_cam[cam_class]
 
-                    # pamr ---------------------
-                    # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
-                    # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
-                    # cam_up_single = cam_up_single[0]
-                    # --------------------------
+        # getam
+        sum_cam = np.sum(cam_list, axis=0)
+        norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
+        
+        # getam and cam combination
+        # norm_cam = norm_cam * patch_norm_cam
+        # print(norm_cam.shape)
+        # norm_cam = (norm_cam - np.min(norm_cam, (1, 2), keepdims=True)) / (np.max(norm_cam, (1, 2), keepdims=True) - np.min(norm_cam, (1, 2), keepdims=True) + 1e-5 )  
+        # concat_cam = np.stack((patch_norm_cam, norm_cam), axis=0)
+        # concat_cam = np.max(concat_cam, axis=0)
+        # np.putmask(norm_cam, norm_cam>0.34, concat_cam)
 
-                    cam_up_single = cam_up_single.cpu().data.numpy()
-                    
-                    if hflip%2 == 1:
-                        # print(cam_up_single.shape)
-                        cam_up_single = np.flip(cam_up_single, axis=2)
-                    
-                    cam_list.append(cam_up_single)  
-            
+        # print(norm_cam.shape)
+        # norm_cam = cv2.resize(norm_cam, (H,W))
 
-            # patch cam
-            patch_sum_cam = np.sum(patch_cam_list, axis=0)
-            patch_norm_cam = patch_sum_cam / (np.max(patch_sum_cam, (1, 2), keepdims=True) + 1e-5)
-            # print(patch_norm_cam.shape)
-            patch_cam_dict = {}
-            for cam_class in range(20):
-                if cur_label[cam_class] > 1e-5:
-                    patch_cam_dict[cam_class] = patch_norm_cam[cam_class]
+                    # print(norm_cam.shape)  
 
-            # getam
-            sum_cam = np.sum(cam_list, axis=0)
-            norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-            # norm_cam = norm_cam * patch_norm_cam
-            # print(norm_cam.shape)
-            # norm_cam = (norm_cam - np.min(norm_cam, (1, 2), keepdims=True)) / (np.max(norm_cam, (1, 2), keepdims=True) - np.min(norm_cam, (1, 2), keepdims=True) + 1e-5 )  
+                    # norm_cam = cam_up_single / (np.max(cam_up_single, (1, 2), keepdims=True) + 1e-5)
+                    # print(norm_cam.shape)
+                    # cam_list.append(norm_cam)           
 
-            
-            
-            concat_cam = np.stack((patch_norm_cam, norm_cam), axis=0)
-            # print(concat_cam.shape)
+                # original_img = original_img.transpose(1,2,0).astype(np.uint8)
+        
+        cam_dict = {}
+        for cam_class in range(20):
+            if cur_label[cam_class] > 1e-5:
+                cam_dict[cam_class] = norm_cam[cam_class]
+        
+        if args.out_cam is not None:
+            np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
 
-            # print(np.max(concat_cam, axis=0).shape)
-            concat_cam = np.max(concat_cam, axis=0)
-            # norm_cam[norm_cam>0.3] = concat_cam 
-            np.putmask(norm_cam, norm_cam>0.34, concat_cam)
+        ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
+        # ori_img = rgb_img.transpose(1,2,0)
+        # print(ori_img.shape, rgb_img.shape)
+        
+        # heatmap
+        for cam_class in range(20):
+            if cur_label[cam_class] > 1e-5:
+                mask = patch_norm_cam[cam_class,:]
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
+                # cv2.imwrite(os.path.join(args.heatmap, name + '_{}_cam.jpg'.format(classes[cam_class])), cam_output)
 
-            # print(norm_cam.shape)
-            # norm_cam = cv2.resize(norm_cam, (H,W))
+                mask = norm_cam[cam_class,:]
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
+                cv2.imwrite(os.path.join(args.heatmap, name + '_{}_getam.jpg'.format(classes[cam_class])), cam_output)
 
-                        # print(norm_cam.shape)  
+        orig_img = np.asarray(Image.open('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name)))
+        def _crf_with_alpha(cam_dict, alpha):
+            v = np.array(list(cam_dict.values()))
+            bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
+            bgcam_score = np.concatenate((bg_score, v), axis=0)
+            crf_score = imutils.crf_inference(orig_img, bgcam_score, labels=bgcam_score.shape[0])
 
-                        # norm_cam = cam_up_single / (np.max(cam_up_single, (1, 2), keepdims=True) + 1e-5)
-                        # print(norm_cam.shape)
-                        # cam_list.append(norm_cam)           
+            n_crf_al = dict()
 
-                    # original_img = original_img.transpose(1,2,0).astype(np.uint8)
-            
-            cam_dict = {}
-            for cam_class in range(20):
-                if cur_label[cam_class] > 1e-5:
-                    cam_dict[cam_class] = norm_cam[cam_class]
-            
-            if args.out_cam is not None:
-                np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
+            n_crf_al[0] = crf_score[0]
+            for i, key in enumerate(cam_dict.keys()):
+                n_crf_al[key+1] = crf_score[i+1]
 
-            ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
-            # ori_img = rgb_img.transpose(1,2,0)
-            # print(ori_img.shape, rgb_img.shape)
-                    
-            for cam_class in range(20):
-                if cur_label[cam_class] > 1e-5:
-                    mask = patch_norm_cam[cam_class,:]
-                    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-                    ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-                    cam_output = heatmap * 0.5 + ori_img * 0.5
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_cam.jpg'.format(classes[cam_class])), cam_output)
+            return n_crf_al
 
-                    mask = norm_cam[cam_class,:]
-                    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-                    ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-                    cam_output = heatmap * 0.5 + ori_img * 0.5
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_getam.jpg'.format(classes[cam_class])), cam_output)
+        if args.out_la_crf is not None:
+            crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
+            np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
 
+        if args.out_ha_crf is not None:
+            crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
+            np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
 
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()

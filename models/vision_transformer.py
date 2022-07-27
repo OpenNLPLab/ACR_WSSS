@@ -144,6 +144,7 @@ def compute_rollout_attention(all_layer_matrices, start_layer=0):
         joint_attention = all_layer_matrices[i].bmm(joint_attention)
     return joint_attention
 
+
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -177,6 +178,8 @@ class Attention(nn.Module):
 
         self.attn_map = None
         self.attn_map_gradients = None
+
+        # self.activation_drop = high_activation_drop(thresh=0.5)
 
     def get_attn(self):
         return self.attn_map

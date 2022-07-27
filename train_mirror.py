@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*- 
+'CUDA_VISIBLE_DEVICES=4,5,6,7 python train_mirror.py --backbone vitb_hybrid --session_name mirror_015 --lr 0.01 --IMpath /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages --batch_size 1 --crop_size 384 -g 4'
 from ast import expr_context
 from curses import flash
 import numpy as np
@@ -45,7 +46,7 @@ def setup(seed):
     np.random.seed(seed)
     # random.seed(seed)
 
-def validation(model, args, optimizer, writer):
+def validation(model, args):
     val_list = mytool.read_file('voc12/val_id.txt')
     data_gen = mytool.chunker(val_list, 1)
     model.eval()
@@ -61,12 +62,10 @@ def validation(model, args, optimizer, writer):
             img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
-            x1, x2, _ ,_ = model.module.forward_cls(img)
+            x1, _, _ ,_ = model.module.forward_cls(img)
             # x, cam = model.module.forward_cam_multiscale(img)
             loss = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x2, label)
             val_loss_meter.add({'loss': loss.item()})
-            writer.add_scalar('val loss', loss.item(), optimizer.global_step)
-
 
             save_cam = False
             # visualize cam
@@ -226,17 +225,16 @@ def train(gpu, args):
         b,c,h,w = img.shape
 
         bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
-
         img2 = flipper1(img)
 
         # scale = np.random.uniform(0, 1)
 
-        # if scale>0.75:
+        # if scale>0.8:
         #     img2 = F.interpolate(img2, \
-        #     (int(args.crop_size*1.5), int(args.crop_size*1.5)), mode='bilinear', align_corners=True)
-        # elif scale<0.25:
+        #     (int(args.crop_size*1.25), int(args.crop_size*1.25)), mode='bilinear', align_corners=True)
+        # elif scale<0.2:
         #     img2 = F.interpolate(img2, \
-        #     (args.crop_size//2, args.crop_size//2), mode='bilinear', align_corners=True)
+        #     (int(args.crop_size*0.75), int(args.crop_size*0.75)), mode='bilinear', align_corners=True)
 
         # img2 = flipper2(img2)
         # img2 = img.clone()
@@ -249,10 +247,10 @@ def train(gpu, args):
             x_p_1, x_p_2 = cls_list[2], cls_list[3]
             x_b_1, x_b_2 = cls_list[4], cls_list[5]
             
-            # if scale>0.75:
+            # if scale>0.8:
             #     attn2 = F.interpolate(attn2, \
             #     (attn1.shape[2], attn1.shape[3]), mode='bilinear', align_corners=True)
-            # elif scale<0.25:
+            # elif scale<0.2:
             #     attn2 = F.interpolate(attn2, \
             #     (attn1.shape[2], attn1.shape[3]), mode='bilinear', align_corners=True)
 
@@ -347,14 +345,13 @@ def train(gpu, args):
             # writer.add_scalar('cls_token_map_mean_2', torch.mean(cls_token_map_2, (0,1,2)).item(), optimizer.global_step)
             # writer.add_scalar('bkg_token_map_mean_2', torch.mean(bkg_token_map_2, (0,1,2)).item(), optimizer.global_step)
 
-
             # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
 
             
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + \
-            F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + \
-            F.multilabel_soft_margin_loss(x_p_2, label) 
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label)  \
+            + F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)  \
+            + F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
             # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
@@ -366,21 +363,22 @@ def train(gpu, args):
 
             loss = cls_loss_1 + cls_loss_2 + \
                 cls_align_loss*100 + aff_align_loss*100 \
-                    #  + bkg_loss_1 + bkg_loss_2  \
+                    # + bkg_loss_1 + bkg_loss_2  \
                     #    + intra_frg_bkg_loss * 0.1 
                     # + bkg_align_loss*1000 \
                         # + bkg_loss_1 + bkg_loss_2  \
                 # + intra_frg_bkg_loss
-
-            writer.add_scalar('cls_align_loss', cls_align_loss.item(), optimizer.global_step)
-            writer.add_scalar('aff_align_loss', aff_align_loss.item(), optimizer.global_step)
-            writer.add_scalar('cls_loss_1', cls_loss_1.item(), optimizer.global_step)
-            writer.add_scalar('cls_loss_2', cls_loss_2.item(), optimizer.global_step)
-            # writer.add_scalar('bkg_loss_1', bkg_loss_1.item(), optimizer.global_step)
-            # writer.add_scalar('bkg_loss_2', bkg_loss_2.item(), optimizer.global_step)
-            # writer.add_scalar('bkg_align_loss', bkg_align_loss.item(), optimizer.global_step)
-            # writer.add_scalar('intra_frg_bkg_loss', intra_frg_bkg_loss.item(), optimizer.global_step)
-            writer.add_scalar('loss', loss.item(), optimizer.global_step)
+            
+            if gpu==0:
+                writer.add_scalar('cls_align_loss', cls_align_loss.item(), optimizer.global_step)
+                writer.add_scalar('aff_align_loss', aff_align_loss.item(), optimizer.global_step)
+                writer.add_scalar('cls_loss_1', cls_loss_1.item(), optimizer.global_step)
+                writer.add_scalar('cls_loss_2', cls_loss_2.item(), optimizer.global_step)
+                # writer.add_scalar('bkg_loss_1', bkg_loss_1.item(), optimizer.global_step)
+                # writer.add_scalar('bkg_loss_2', bkg_loss_2.item(), optimizer.global_step)
+                # writer.add_scalar('bkg_align_loss', bkg_align_loss.item(), optimizer.global_step)
+                # writer.add_scalar('intra_frg_bkg_loss', intra_frg_bkg_loss.item(), optimizer.global_step)
+                writer.add_scalar('loss', loss.item(), optimizer.global_step)
             
             avg_meter.add({'loss': loss.item()})
 
@@ -392,12 +390,14 @@ def train(gpu, args):
         getam = True
         if getam:
             model.zero_grad()
-            cls_pred,_, _,_ = model.module.forward_cls(img)
+            cls_pred,_, attn,_ = model.module.forward_cls(img)
             b,c,h,w = img.shape
 
             cam_matrix = torch.zeros((b, 20, w, h))
-
+            
             for batch in range(b):
+                patch_aff = attn[batch,:,1:,1:]
+                patch_aff = torch.sum(patch_aff, dim=0, keepdim=True)
                 name = name_list[batch]
                 original_img = ori_images[batch]
                 cur_label = label[batch, :]
@@ -412,11 +412,10 @@ def train(gpu, args):
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
                         cam, _, _ = model.module.getam(batch, start_layer=6)
-                        
-                        # attn_map = attn_map / (torch.max(attn_map) + 1e-5)
-                        # cam = (cam.unsqueeze(1)@attn_map).squeeze(1) # add affinity 
-                        # print(cam.shape)
 
+                        # print(cam.shape, patch_aff.shape)
+                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                        # print(cam.shape)
                         cam = cam.reshape(int(h //16), int(w //16))
 
                         cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (w, h), mode='bilinear', align_corners=True)
@@ -434,7 +433,7 @@ def train(gpu, args):
                 for cam_class in range(20):
                     if cur_label[cam_class] > 1e-5:
                         mask = norm_cam[cam_class,:]
-            
+        
                         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
 
                         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
@@ -457,10 +456,10 @@ def train(gpu, args):
                 'lr: %.4f' % (optimizer.param_groups[0]['lr']))
         torch.distributed.barrier()
 
-        if (optimizer.global_step+1)%3000 == 0:
+        if (optimizer.global_step+1)%5000 == 0:
             print('validating....')
             torch.distributed.barrier()
-            validation(model, args, optimizer, writer)
+            validation(model, args)
             model.train()
             if gpu==0:
                 torch.save(model.module.state_dict(), os.path.join('weight', args.session_name + '_last.pth'))
@@ -474,6 +473,6 @@ def train(gpu, args):
 
 if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    os.environ["CUDA_VISIBLE_DEVICES"]="7"
+    # os.environ["CUDA_VISIBLE_DEVICES"]="7"
     main()
 

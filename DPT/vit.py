@@ -112,6 +112,7 @@ def forward_vit(pretrained, x):
 
     # print(glob.shape)
     x_cls = layer_4[:, 0, :] #special token 
+    x_patch = layer_4[:, 1:, :]
 
     layer_1 = pretrained.act_postprocess1[0:2](layer_1)
     layer_2 = pretrained.act_postprocess2[0:2](layer_2)
@@ -144,7 +145,7 @@ def forward_vit(pretrained, x):
     layer_3 = pretrained.act_postprocess3[3 : len(pretrained.act_postprocess3)](layer_3)
     layer_4 = pretrained.act_postprocess4[3 : len(pretrained.act_postprocess4)](layer_4)
 
-    return layer_1, layer_2, layer_3, layer_4, x_cls, res_features
+    return layer_1, layer_2, layer_3, layer_4, x_cls, x_patch
 
 
 def _resize_pos_embed(self, posemb, gs_h, gs_w):
@@ -409,6 +410,7 @@ def _make_vit_b_rn50_backbone(
     use_readout="ignore",
     start_index=1,
     enable_attention_hooks=False,
+    seg=False,
 ):
     pretrained = nn.Module()
 
@@ -439,92 +441,93 @@ def _make_vit_b_rn50_backbone(
 
     readout_oper = get_readout_oper(vit_features, features, use_readout, start_index)
 
-    if use_vit_only == True:
-        pretrained.act_postprocess1 = nn.Sequential(
-            readout_oper[0],
+    if seg:
+        if use_vit_only == True:
+            pretrained.act_postprocess1 = nn.Sequential(
+                readout_oper[0],
+                Transpose(1, 2),
+                nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
+                nn.Conv2d(
+                    in_channels=vit_features,
+                    out_channels=features[0],
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                ),
+                nn.ConvTranspose2d(
+                    in_channels=features[0],
+                    out_channels=features[0],
+                    kernel_size=4,
+                    stride=4,
+                    padding=0,
+                    bias=True,
+                    dilation=1,
+                    groups=1,
+                ),
+            )
+
+            pretrained.act_postprocess2 = nn.Sequential(
+                readout_oper[1],
+                Transpose(1, 2),
+                nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
+                nn.Conv2d(
+                    in_channels=vit_features,
+                    out_channels=features[1],
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                ),
+                nn.ConvTranspose2d(
+                    in_channels=features[1],
+                    out_channels=features[1],
+                    kernel_size=2,
+                    stride=2,
+                    padding=0,
+                    bias=True,
+                    dilation=1,
+                    groups=1,
+                ),
+            )
+        else:
+            pretrained.act_postprocess1 = nn.Sequential(
+                nn.Identity(), nn.Identity(), nn.Identity()
+            )
+            pretrained.act_postprocess2 = nn.Sequential(
+                nn.Identity(), nn.Identity(), nn.Identity()
+            )
+
+        pretrained.act_postprocess3 = nn.Sequential(
+            readout_oper[2],
             Transpose(1, 2),
             nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
             nn.Conv2d(
                 in_channels=vit_features,
-                out_channels=features[0],
+                out_channels=features[2],
                 kernel_size=1,
                 stride=1,
                 padding=0,
-            ),
-            nn.ConvTranspose2d(
-                in_channels=features[0],
-                out_channels=features[0],
-                kernel_size=4,
-                stride=4,
-                padding=0,
-                bias=True,
-                dilation=1,
-                groups=1,
             ),
         )
 
-        pretrained.act_postprocess2 = nn.Sequential(
-            readout_oper[1],
+        pretrained.act_postprocess4 = nn.Sequential(
+            readout_oper[3],
             Transpose(1, 2),
             nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
             nn.Conv2d(
                 in_channels=vit_features,
-                out_channels=features[1],
+                out_channels=features[3],
                 kernel_size=1,
                 stride=1,
                 padding=0,
             ),
-            nn.ConvTranspose2d(
-                in_channels=features[1],
-                out_channels=features[1],
-                kernel_size=2,
+            nn.Conv2d(
+                in_channels=features[3],
+                out_channels=features[3],
+                kernel_size=3,
                 stride=2,
-                padding=0,
-                bias=True,
-                dilation=1,
-                groups=1,
+                padding=1,
             ),
         )
-    else:
-        pretrained.act_postprocess1 = nn.Sequential(
-            nn.Identity(), nn.Identity(), nn.Identity()
-        )
-        pretrained.act_postprocess2 = nn.Sequential(
-            nn.Identity(), nn.Identity(), nn.Identity()
-        )
-
-    pretrained.act_postprocess3 = nn.Sequential(
-        readout_oper[2],
-        Transpose(1, 2),
-        nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
-        nn.Conv2d(
-            in_channels=vit_features,
-            out_channels=features[2],
-            kernel_size=1,
-            stride=1,
-            padding=0,
-        ),
-    )
-
-    pretrained.act_postprocess4 = nn.Sequential(
-        readout_oper[3],
-        Transpose(1, 2),
-        nn.Unflatten(2, torch.Size([size[0] // 16, size[1] // 16])),
-        nn.Conv2d(
-            in_channels=vit_features,
-            out_channels=features[3],
-            kernel_size=1,
-            stride=1,
-            padding=0,
-        ),
-        nn.Conv2d(
-            in_channels=features[3],
-            out_channels=features[3],
-            kernel_size=3,
-            stride=2,
-            padding=1,
-        ),
-    )
 
     pretrained.model.start_index = start_index
     pretrained.model.patch_size = [16, 16]
@@ -548,6 +551,7 @@ def _make_pretrained_vitb_rn50_384(
     hooks=None,
     use_vit_only=False,
     enable_attention_hooks=False,
+    seg = True
 ):
     model = create_model("vit_base_resnet50_384", pretrained=pretrained)
 
@@ -560,6 +564,7 @@ def _make_pretrained_vitb_rn50_384(
         use_vit_only=use_vit_only,
         use_readout=use_readout,
         enable_attention_hooks=enable_attention_hooks,
+        seg=seg
     )
 
 

@@ -673,6 +673,63 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, name, iter,saliency, cls
     return crf_label, saliency
 
 
+
+def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
+    cam_label = cam_label.astype(np.uint8)
+
+    cam_dict = {}
+    cam_np = np.zeros_like(norm_cam)
+    for i in range(20):
+        if cam_label[i] > 1e-5:
+            cam_dict[i] = norm_cam[i]
+            cam_np[i] = norm_cam[i]
+
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.expand_dims(bg_score, axis=0)
+    cam_all = np.concatenate((bg_score, cam_np))
+    _, bg_w, bg_h = bg_score.shape
+
+    cam_img = np.argmax(cam_all, 0)
+
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 4)
+    crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
+    crf_la_label = np.argmax(crf_la, 0)
+    crf_ha_label = np.argmax(crf_ha, 0)
+    crf_label = crf_la_label.copy()
+    crf_label[crf_la_label == 0] = 255
+
+    single_img_classes = np.unique(crf_la_label)
+    cam_sure_region = np.zeros([bg_w, bg_h], dtype=bool)
+    for class_i in single_img_classes:
+        if class_i != 0:
+            class_not_region = (cam_img != class_i)
+            cam_class = cam_all[class_i, :, :]
+            cam_class[class_not_region] = 0
+            cam_class_order = cam_class[cam_class > 0.1]
+            cam_class_order = np.sort(cam_class_order)
+            confidence_pos = int(cam_class_order.shape[0] * 0.6)
+            confidence_value = cam_class_order[confidence_pos]
+            class_sure_region = (cam_class > confidence_value)
+            cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
+        else:
+            class_not_region = (cam_img != class_i)
+            cam_class = cam_all[class_i, :, :]
+            cam_class[class_not_region] = 0
+            class_sure_region = (cam_class > 0.8)
+            cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
+
+    cam_not_sure_region = ~cam_sure_region
+
+    crf_label[crf_ha_label == 0] = 0
+    crf_label_np = np.concatenate([np.expand_dims(crf_ha[0, :, :], axis=0), crf_la[1:, :, :]])
+    crf_not_sure_region = np.max(crf_label_np, 0) < 0.8
+    not_sure_region = np.logical_or(crf_not_sure_region, cam_not_sure_region)
+
+    crf_label[not_sure_region] = 255
+
+    return crf_label
+
+
 # use this 
 def compute_seg_label_coco(ori_img, cam_label, norm_cam, croppings, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.3):
     cam_label = cam_label.astype(np.uint8)
@@ -1041,20 +1098,23 @@ def hide_patch(img):
     # possible grid size, 0 means no hiding
     grid_sizes=[0,16,32,44,56]
 
+    # grid_sizes=[16]
+
     # hiding probability
     hide_prob = 0.25
- 
+
     # randomly choose one grid size
-    grid_size= grid_sizes[random.randint(0,len(grid_sizes)-1)]
+    # grid_size= grid_sizes[random.randint(0,len(grid_sizes)-1)]
+    grid_size = 16
 
     # hide the patches
     if(grid_size>0):
-         for x in range(0,wd,grid_size):
-             for y in range(0,ht,grid_size):
-                 x_end = min(wd, x+grid_size)  
-                 y_end = min(ht, y+grid_size)
-                 if(random.random() <=  hide_prob):
-                       img[x:x_end,y:y_end,:]=0
+        for x in range(0,wd,grid_size):
+            for y in range(0,ht,grid_size):
+                x_end = min(wd, x+grid_size)  
+                y_end = min(ht, y+grid_size)
+                if(random.random() <=  hide_prob):
+                    img[x:x_end,y:y_end,:]=0
 
     return img
 
@@ -1111,7 +1171,7 @@ def get_data_from_chunk_v2(chunk, args):
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
         img_temp, cropping = RandomCrop(img_temp, dim)
-        # img_temp = hide_patch(img_temp)
+        img_temp = hide_patch(img_temp)
 
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
@@ -1157,8 +1217,6 @@ def get_data_from_chunk_v3(chunk, args):
     croppings = np.zeros((dim, dim, len(chunk)))
     labels = load_image_label_list_from_npy(chunk)
     labels = torch.from_numpy(np.array(labels))
-
-    hog = cv2.HOGDescriptor()
 
     name_list = []
 
@@ -1801,7 +1859,7 @@ def validation(model, use_crf=False):
             h, w, _ = img_temp.shape
             img_original = img_temp.astype(np.uint8)
 
-            test_size = 256
+            test_size = 384
             # container = np.zeros((test_size, test_size, 3), np.float32)
             # if h>=w:
             #     img_temp = cv2.resize(img_temp, (int(test_size*w/h), test_size))
@@ -1824,7 +1882,9 @@ def validation(model, use_crf=False):
 
             input = torch.from_numpy(img_temp[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
-            _, output, _= model(input)
+            # _, output, _= model(input)
+            _, _, output = model.module.forward_seg(input)
+
 
             # output = output[]
             # print(output.shape)
