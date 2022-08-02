@@ -29,7 +29,7 @@ from torch.utils.tensorboard import SummaryWriter
 import visdom
 import shutil
 # import network
-from myTool import compute_seg_label_rrm, compute_joint_loss, validation, decode_segmap
+from myTool import compute_seg_label_rrm, compute_joint_loss, validation, decode_segmap, compute_seg_label_3
 from DenseEnergyLoss import DenseEnergyLoss
 
 # from timm.models import create_model
@@ -425,9 +425,13 @@ def train(gpu, args):
                 cam_up_single = cam_up_single.cpu().data.numpy()
                 norm_cam = (cam_up_single - np.min(cam_up_single, (1, 2), keepdims=True)) / \
                     (np.max(cam_up_single, (1, 2), keepdims=True) - np.min(cam_up_single, (1, 2), keepdims=True) + 1e-5)
-
+                
+                saliency_map = saliency[batch,:]
+                saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
-                seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam)
+                # seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam)
+                seg_label[batch], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
+                norm_cam,  name, iter, saliency_map.data.numpy(), cut_threshold=0.9)
             
             # train segmentation
             torch.distributed.barrier()
@@ -448,9 +452,9 @@ def train(gpu, args):
                 cv2.imwrite('/home/users/u5876230/mirror/output/seg/{}_{}.png'.format(name, iter),
                             (seg_pred_b * 255).astype('uint8')*0.5 + original_img*0.5)
 
-
             cls_loss = F.multilabel_soft_margin_loss(x_cls, label) + F.multilabel_soft_margin_loss(x_p_cls, label) 
             celoss, dloss = compute_joint_loss(ori_images, seg, seg_label, croppings, critersion,DenseEnergyLosslayer)
+            
 
             if gpu==0:
                 writer.add_scalar('seg_cls_loss', cls_loss.item(), optimizer.global_step)

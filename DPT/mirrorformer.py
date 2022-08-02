@@ -112,10 +112,11 @@ class DPT(BaseModel):
             seg = seg
         )
 
-        self.scratch.refinenet1 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet2 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet3 = _make_fusion_block(features, use_bn)
-        self.scratch.refinenet4 = _make_fusion_block(features, use_bn)
+        if seg:
+            self.scratch.refinenet1 = _make_fusion_block(features, use_bn)
+            self.scratch.refinenet2 = _make_fusion_block(features, use_bn)
+            self.scratch.refinenet3 = _make_fusion_block(features, use_bn)
+            self.scratch.refinenet4 = _make_fusion_block(features, use_bn)
 
         # classification head
         self.cls_head = nn.Linear(768, self.num_class)
@@ -123,7 +124,6 @@ class DPT(BaseModel):
         # self.classifier = nn.Conv2d(768, self.num_class, kernel_size=1, bias=False)
 
         self.use_gap = True
-
 
 
     # with bkg token
@@ -229,6 +229,7 @@ class MirrorFormer(DPT):
             'vitl':"vitl16_384",
         }
 
+        
         cur_backbone = backbone_dict[backbone_name]
         self.cur_backbone = cur_backbone
         print('cur_backbone:', cur_backbone)

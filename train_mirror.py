@@ -224,7 +224,7 @@ def train(gpu, args):
         # grad = grad.cuda(non_blocking=True)
         b,c,h,w = img.shape
 
-        bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
+        # bkg_label = torch.zeros_like(label).cuda(non_blocking=True)
         img2 = flipper1(img)
 
         # scale = np.random.uniform(0, 1)
@@ -245,7 +245,7 @@ def train(gpu, args):
             attn1, attn2 = attn_list[0], attn_list[1]
             x1, x2 = cls_list[0], cls_list[1]
             x_p_1, x_p_2 = cls_list[2], cls_list[3]
-            x_b_1, x_b_2 = cls_list[4], cls_list[5]
+            # x_b_1, x_b_2 = cls_list[4], cls_list[5]
             
             # if scale>0.8:
             #     attn2 = F.interpolate(attn2, \
@@ -347,11 +347,8 @@ def train(gpu, args):
 
             # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
 
-            
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label)  \
-            + F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label)  \
-            + F.multilabel_soft_margin_loss(x_p_2, label) 
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) #+ F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
             # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)

@@ -188,7 +188,7 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, name, iter, saliency, cls_
     return crf_label, saliency
 
 # use this 
-def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, cls_pred, save_heatmap=False, cut_threshold = 0.9):
+def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, save_heatmap=False, cut_threshold = 0.9):
     ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
     cam_label = cam_label.astype(np.uint8)
 
@@ -257,11 +257,11 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, cls_
     frg_dilate = cv2.morphologyEx(frg, cv2.MORPH_OPEN, kernel=np.ones((10,10),np.uint8 ))
     crf_label[frg_dilate!=255] = 0
 
-    cv2.imwrite('/data/u5876230/ete_wsss/pseudo/{}.png'.format(name), crf_label)
+    cv2.imwrite('output/pseudo/{}.png'.format(name), crf_label)
 
-    # rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
-    # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/pseudo/{}_color.png'.format(name),
-                        # (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
     # cv2.imwrite('/home/users/u5876230/ete_project/ete_output/vis/{}_orig.png'.format(name),ori_img)
 
     return crf_label, saliency
@@ -901,7 +901,7 @@ def scale_gt(img_temp, scale):
 
 def load_image_label_list_from_npy(img_name_list):
 
-    cls_labels_dict = np.load('voc12/cls_labels.npy',allow_pickle=True).item()
+    cls_labels_dict = np.load('/home/users/u5876230/mirror/voc12/cls_labels.npy',allow_pickle=True).item()
 
     return [cls_labels_dict[img_name] for img_name in img_name_list]
 
@@ -1845,7 +1845,7 @@ def validation(model, use_crf=False):
     evaluator = Evaluator(num_class=21) 
 
     im_path = "/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages"
-    img_list = open('voc12/val_id.txt').readlines()
+    img_list = open('/home/users/u5876230/mirror/voc12/val_id.txt').readlines()
     pred_softmax = torch.nn.Softmax(dim=0)
     with torch.no_grad():
         for index, i in enumerate(img_list):

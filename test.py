@@ -13,6 +13,8 @@ from DPT.DPT import DPTSegmentationModel
 from myTool import *
 from tool.metrics import Evaluator
 from PIL import Image
+from DPT.mirrorformer import MirrorFormer, MirrorFormer_SingleStage
+
 
 classes = ['bkg',
     'aeroplane',
@@ -60,7 +62,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
+    model = MirrorFormer_SingleStage(num_classes=20, backbone_name=args.backbone) 
+
+    # model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
     weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
@@ -115,7 +119,7 @@ if __name__ == '__main__':
 
         output_list = []
 
-        for test_size in [256, 320, 480]:
+        for test_size in [256, 320, 384]:
             img_input = cv2.resize(img_temp, (test_size, test_size))
 
             img_input = cv2.cvtColor(img_input, cv2.COLOR_BGR2RGB).astype(np.float)
@@ -125,7 +129,8 @@ if __name__ == '__main__':
 
             input = torch.from_numpy(img_input[np.newaxis, :].transpose(0, 3, 1, 2)).float().cuda()
 
-            _, output, _= model(input)
+            # _, output, _= model(input)
+            _, _, output = model.forward_seg(input)
 
             # output = output[]
             # print(output.shape)
@@ -147,27 +152,27 @@ if __name__ == '__main__':
         save_path = os.path.join(args.out_cam_pred,i[:-1] + '.png')
         cv2.imwrite(save_path,output.astype(np.uint8))
         
-        if args.out_la_crf is not None:
-            crf_la = _crf_with_alpha(pred_prob, img_original)
+        # if args.out_la_crf is not None:
+        crf_la = _crf_with_alpha(pred_prob, img_original)
 
-            crf_img = np.argmax(crf_la, 0)
+        crf_img = np.argmax(crf_la, 0)
 
-            # print(np.unique(crf_img))
-            if args.val:
-                evaluator.add_batch(target, crf_img)
-                miou = evaluator.Mean_Intersection_over_Union()
-                print(miou)
+        # print(np.unique(crf_img))
+        if args.val:
+            evaluator.add_batch(target, crf_img)
+            miou = evaluator.Mean_Intersection_over_Union()
+            print(miou)
 
-            imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
+        # imageio.imsave(os.path.join(args.out_la_crf, i[:-1] + '.png'), crf_img.astype(np.uint8))
 
-            rgb_pred = decode_segmap(crf_img, dataset="pascal")
-            cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_hybrid.png'),
-                        (rgb_pred * 255).astype('uint8') * 0.7 + img_original* 0.3)
+        rgb_pred = decode_segmap(crf_img, dataset="pascal")
+        cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_hybrid.png'),
+                    (rgb_pred * 255).astype('uint8') * 0.7 + img_original* 0.3)
 
-            if args.val:
-                rgb_target = decode_segmap(target, dataset="pascal")
-                cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_gt.png'),
-                            (rgb_target * 255).astype('uint8') * 0.7 + img_original* 0.3)
+        if args.val:
+            rgb_target = decode_segmap(target, dataset="pascal")
+            cv2.imwrite(os.path.join(args.out_color, i[:-1] + '_gt.png'),
+                        (rgb_target * 255).astype('uint8') * 0.7 + img_original* 0.3)
 
     if args.val:
         Acc = evaluator.Pixel_Accuracy()
