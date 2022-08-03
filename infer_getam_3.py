@@ -21,7 +21,6 @@ import myTool as mytool
 from pamr import PAMR
 # import random
 import torch.multiprocessing as mp
-from myTool import compute_seg_label_rrm, compute_joint_loss, validation, decode_segmap, compute_seg_label_3
 import torch.distributed as dist
 # import seaborn as sns
 import matplotlib.pyplot as plt
@@ -124,17 +123,14 @@ def train(gpu, args):
 
     # img_list = mytool.read_file('voc12/val_id.txt')
     img_list = mytool.read_file_2(args.LISTpath)
-
     max_step = len(img_list)
-
     data_gen = mytool.chunker(img_list, 1)
-
     timer = pyutils.Timer("Session started: ")
  
     for iter in range(max_step):
         print(iter)
-        if iter > 301:
-            break
+        if iter > 200:
+            pass
         chunk = data_gen.__next__()
         img_list = chunk
         img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)        
@@ -148,70 +144,72 @@ def train(gpu, args):
         rgb_img = cv2.imread('{}/{}.jpg'.format(args.IMpath, name))
         W,H,_ = rgb_img.shape
 
+       
+
         # generate getam
         multi_scale = True
         cam_list = []
         patch_cam_list = []
         b,c,h,w = img.shape
-        for scale in [1]:
-            for hflip in [1,2]:
-                cam_matrix = torch.zeros((b, 20, W, H))
-                seg_label = np.zeros((b, W, H))
 
-                model.zero_grad()
+        for infer_iter in range(2):
+            for scale in [1]:
+                for hflip in [1,2]:
+                    cam_matrix = torch.zeros((b, 20, W, H))
+                    model.zero_grad()
 
-                input = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
-                if hflip%2 == 1:
-                    input = flipper1(input)
+                    input = F.interpolate(img, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
+                    if hflip%2 == 1:
+                        input = flipper1(input)
+                    
+                    # cls_pred, _, attn, _ = model.forward_cls(input)
+                    cls_pred, _, attn, patch_cam = model.forward_cam(input)
+                    patch_cam = patch_cam.permute(0,2,1).reshape(1,20,int((h*scale) //16), int((w*scale) //16))
+                    patch_cam = F.upsample(patch_cam, [W,H], mode='bilinear', align_corners=False)[0]
+                    patch_cam = patch_cam.detach().cpu().numpy() * label[0,:].cpu().clone().view(20, 1, 1).numpy()
+                    if hflip%2 == 1:
+                        patch_cam = np.flip(patch_cam, axis=-1)
+
+                    # print(cam.shape)
+                    patch_cam_list.append(patch_cam)
+
+                    patch_aff = attn[:,:,1:,1:]
+                    patch_aff = torch.sum(patch_aff, dim=1)
+                    # print(patch_aff.shape)
                 
-                # cls_pred, _, attn, _ = model.forward_cls(input)
-                cls_pred, _, attn, patch_cam = model.forward_cam(input)
-                patch_cam = patch_cam.permute(0,2,1).reshape(1,20,int((h*scale) //16), int((w*scale) //16))
-                patch_cam = F.upsample(patch_cam, [W,H], mode='bilinear', align_corners=False)[0]
-                patch_cam = patch_cam.detach().cpu().numpy() * label[0,:].cpu().clone().view(20, 1, 1).numpy()
-                if hflip%2 == 1:
-                    patch_cam = np.flip(patch_cam, axis=-1)
+                    original_img = ori_images[0]
+                    cur_label = label[0, :]
+                    output = cls_pred[0, :]
+                    for class_index in range(20):
+                        if cur_label[class_index] > 1e-5:
+                            one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
+                            one_hot[0, class_index] = 1
+                            one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+                            one_hot = torch.sum(one_hot.cuda() * output)
+                
+                            model.zero_grad()
+                            one_hot.backward(retain_graph=True)
+                            cam, _, _ = model.getam(0, start_layer=9)
+                            
+                            # print(cam.shape, patch_aff.shape)
 
-                # print(cam.shape)
-                patch_cam_list.append(patch_cam)
+                            # patch aff refine
+                            cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                            # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
+                            # print(cam.shape)
 
-                patch_aff = attn[:,:,1:,1:]
-                patch_aff = torch.sum(patch_aff, dim=1)
-                # print(patch_aff.shape)
-            
-                original_img = ori_images[0]
-                cur_label = label[0, :]
-                output = cls_pred[0, :]
-                for class_index in range(20):
-                    if cur_label[class_index] > 1e-5:
-                        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-                        one_hot[0, class_index] = 1
-                        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-                        one_hot = torch.sum(one_hot.cuda() * output)
-            
-                        model.zero_grad()
-                        one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=6)
-                        
-                        # print(cam.shape, patch_aff.shape)
+                            cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
 
-                        # patch aff refine
-                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
-                        # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
-                        # print(cam.shape)
+                            # print(cam.shape)
+                            
+                            # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
+                            # print(cam.shape)
+                            # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
 
-                        cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
-
-                        # print(cam.shape)
-                        
-                        # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
-                        # print(cam.shape)
-                        # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
-
-                        # print(cam.shape)
-                        
-                        cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
-                        cam_matrix[0, class_index,:,:] = cam
+                            # print(cam.shape)
+                            
+                            cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                            cam_matrix[0, class_index,:,:] = cam
                 
                 # if hflip==1:
                     # cam_matrix=flipper1(cam_matrix)
@@ -233,7 +231,14 @@ def train(gpu, args):
                     cam_up_single = np.flip(cam_up_single, axis=2)
                 
                 cam_list.append(cam_up_single)  
-        
+
+            # getam
+            sum_cam = np.sum(cam_list, axis=0)
+            norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
+            
+
+
+
         # patch cam
         patch_sum_cam = np.sum(patch_cam_list, axis=0)
         patch_norm_cam = (patch_sum_cam - np.min(patch_sum_cam, (1, 2), keepdims=True)) / (np.max(patch_sum_cam, (1, 2), keepdims=True) - np.min(patch_sum_cam, (1, 2), keepdims=True) + 1e-5 )  
@@ -245,15 +250,7 @@ def train(gpu, args):
 
         # getam
         sum_cam = np.sum(cam_list, axis=0)
-
-        original_img = original_img.transpose(1,2,0).astype(np.uint8)
-        original_img = cv2.resize(original_img, (H, W) )
-
-        
         norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-        # print(original_img.shape, norm_cam.shape)
-        seg_label[0] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam, name)
-
         # norm_cam = (sum_cam) / (np.max(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
 
         # getam and cam combination

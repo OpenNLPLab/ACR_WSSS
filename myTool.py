@@ -683,10 +683,21 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
         if cam_label[i] > 1e-5:
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
+    
+    # save heatmap
+    img = ori_img
+    keys = list(cam_dict.keys())
+    for target_class in keys:
+        mask = cam_dict[target_class]
+        heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+        cam_output = heatmap * 0.5 + img * 0.5
+        cv2.imwrite(os.path.join('output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
 
     bg_score = np.power(1 - np.max(cam_np, 0), 36)
     # bg_score = 0.37
     bg_score = np.expand_dims(bg_score, axis=0)
+    # print(bg_score.shape)
     cam_all = np.concatenate((bg_score, cam_np))
     _, bg_w, bg_h = bg_score.shape
 
@@ -708,7 +719,7 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
             cam_class[class_not_region] = 0
             cam_class_order = cam_class[cam_class > 0.1]
             cam_class_order = np.sort(cam_class_order)
-            confidence_pos = int(cam_class_order.shape[0] * 0.6)
+            confidence_pos = int(cam_class_order.shape[0] * 0.3)
             confidence_value = cam_class_order[confidence_pos]
             class_sure_region = (cam_class > confidence_value)
             cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
@@ -716,7 +727,7 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
             class_not_region = (cam_img != class_i)
             cam_class = cam_all[class_i, :, :]
             cam_class[class_not_region] = 0
-            class_sure_region = (cam_class > 0.8)
+            class_sure_region = (cam_class > 0.3)
             cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
 
     cam_not_sure_region = ~cam_sure_region
@@ -907,7 +918,7 @@ def scale_gt(img_temp, scale):
 
 def load_image_label_list_from_npy(img_name_list):
 
-    cls_labels_dict = np.load('/home/users/u5876230/mirror/voc12/cls_labels.npy',allow_pickle=True).item()
+    cls_labels_dict = np.load('voc12/cls_labels.npy',allow_pickle=True).item()
 
     return [cls_labels_dict[img_name] for img_name in img_name_list]
 
