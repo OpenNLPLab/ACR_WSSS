@@ -674,7 +674,7 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, name, iter,saliency, cls
 
 
 
-def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
+def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
     cam_label = cam_label.astype(np.uint8)
 
     cam_dict = {}
@@ -684,15 +684,16 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
 
-    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.power(1 - np.max(cam_np, 0), 36)
+    # bg_score = 0.37
     bg_score = np.expand_dims(bg_score, axis=0)
     cam_all = np.concatenate((bg_score, cam_np))
     _, bg_w, bg_h = bg_score.shape
 
     cam_img = np.argmax(cam_all, 0)
 
-    crf_la = _crf_with_alpha(ori_img, cam_dict, 4)
-    crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 2)
+    crf_ha = _crf_with_alpha(ori_img, cam_dict, 14)
     crf_la_label = np.argmax(crf_la, 0)
     crf_ha_label = np.argmax(crf_ha, 0)
     crf_label = crf_la_label.copy()
@@ -726,6 +727,11 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
     not_sure_region = np.logical_or(crf_not_sure_region, cam_not_sure_region)
 
     crf_label[not_sure_region] = 255
+    
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
 
     return crf_label
 

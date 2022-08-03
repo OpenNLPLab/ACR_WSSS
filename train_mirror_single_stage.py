@@ -268,10 +268,8 @@ def train(gpu, args):
                 aff_align_loss = F.l1_loss(attn1_aff, attn2_aff, reduction='mean')
                 # bkg_align_loss = F.l1_loss(attn1_bkg, attn2_bkg, reduction='mean')
                 
-                cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + \
-                F.multilabel_soft_margin_loss(x_p_1, label) 
-                cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + \
-                F.multilabel_soft_margin_loss(x_p_2, label) 
+                cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x_p_1, label) 
+                cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) #+ F.multilabel_soft_margin_loss(x_p_2, label) 
 
                 # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
                 # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
@@ -429,9 +427,9 @@ def train(gpu, args):
                 saliency_map = saliency[batch,:]
                 saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
-                # seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam)
-                seg_label[batch], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
-                norm_cam,  name, iter, saliency_map.data.numpy(), cut_threshold=0.9)
+                seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam, name)
+                # seg_label[batch], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
+                # norm_cam,  name, iter, saliency_map.data.numpy(), cut_threshold=0.9)
             
             # train segmentation
             torch.distributed.barrier()
@@ -455,7 +453,6 @@ def train(gpu, args):
             cls_loss = F.multilabel_soft_margin_loss(x_cls, label) + F.multilabel_soft_margin_loss(x_p_cls, label) 
             celoss, dloss = compute_joint_loss(ori_images, seg, seg_label, croppings, critersion,DenseEnergyLosslayer)
             
-
             if gpu==0:
                 writer.add_scalar('seg_cls_loss', cls_loss.item(), optimizer.global_step)
                 writer.add_scalar('seg_ce_loss', celoss.item(), optimizer.global_step)
@@ -480,7 +477,7 @@ def train(gpu, args):
             torch.distributed.barrier()
 
             # validation
-            if (optimizer.global_step-1)%3000 == 0:
+            if (optimizer.global_step+1)%3000 == 0:
                 print('validating....')
                 torch.distributed.barrier()
                 model.eval()
