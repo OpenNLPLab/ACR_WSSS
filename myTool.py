@@ -674,7 +674,7 @@ def compute_seg_label_old(ori_img, cam_label, norm_cam, name, iter,saliency, cls
 
 
 
-def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
+def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
     cam_label = cam_label.astype(np.uint8)
 
     cam_dict = {}
@@ -683,16 +683,29 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
         if cam_label[i] > 1e-5:
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
+    
+    # save heatmap
+    img = ori_img
+    keys = list(cam_dict.keys())
+    for target_class in keys:
+        mask = cam_dict[target_class]
+        heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+        cam_output = heatmap * 0.5 + img * 0.5
+        cv2.imwrite(os.path.join('output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
 
-    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    
+    bg_score = 0.37 * np.ones_like(cam_np[0])
+    # bg_score = np.power(1 - np.max(cam_np, 0), 2)
     bg_score = np.expand_dims(bg_score, axis=0)
+    # print(bg_score.shape)
     cam_all = np.concatenate((bg_score, cam_np))
     _, bg_w, bg_h = bg_score.shape
 
     cam_img = np.argmax(cam_all, 0)
 
-    crf_la = _crf_with_alpha(ori_img, cam_dict, 4)
-    crf_ha = _crf_with_alpha(ori_img, cam_dict, 32)
+    crf_la = _crf_with_alpha(ori_img, cam_dict, 2)
+    crf_ha = _crf_with_alpha(ori_img, cam_dict, 14)
     crf_la_label = np.argmax(crf_la, 0)
     crf_ha_label = np.argmax(crf_ha, 0)
     crf_label = crf_la_label.copy()
@@ -707,7 +720,7 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
             cam_class[class_not_region] = 0
             cam_class_order = cam_class[cam_class > 0.1]
             cam_class_order = np.sort(cam_class_order)
-            confidence_pos = int(cam_class_order.shape[0] * 0.6)
+            confidence_pos = int(cam_class_order.shape[0] * 0.3)
             confidence_value = cam_class_order[confidence_pos]
             class_sure_region = (cam_class > confidence_value)
             cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
@@ -715,7 +728,7 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
             class_not_region = (cam_img != class_i)
             cam_class = cam_all[class_i, :, :]
             cam_class[class_not_region] = 0
-            class_sure_region = (cam_class > 0.8)
+            class_sure_region = (cam_class > 0.3)
             cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
 
     cam_not_sure_region = ~cam_sure_region
@@ -725,7 +738,14 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam):
     crf_not_sure_region = np.max(crf_label_np, 0) < 0.8
     not_sure_region = np.logical_or(crf_not_sure_region, cam_not_sure_region)
 
-    crf_label[not_sure_region] = 255
+    # crf_label[not_sure_region] = 255
+
+    cv2.imwrite('output/pseudo/{}.png'.format(name),crf_label)
+
+    rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
+    cv2.imwrite('output/pseudo/{}_color.png'.format(name),
+                        (rgb_pseudo_label * 255).astype('uint8') * 0.7 + ori_img * 0.3)
+
 
     return crf_label
 
@@ -901,7 +921,7 @@ def scale_gt(img_temp, scale):
 
 def load_image_label_list_from_npy(img_name_list):
 
-    cls_labels_dict = np.load('/home/users/u5876230/mirror/voc12/cls_labels.npy',allow_pickle=True).item()
+    cls_labels_dict = np.load('voc12/cls_labels.npy',allow_pickle=True).item()
 
     return [cls_labels_dict[img_name] for img_name in img_name_list]
 

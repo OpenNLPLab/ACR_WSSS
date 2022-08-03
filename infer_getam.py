@@ -71,8 +71,8 @@ def main():
     parser.add_argument("--heatmap",  type=str)
     parser.add_argument("--out_la_crf", default=None, type=str)
     parser.add_argument("--out_ha_crf", default=None, type=str)
-    parser.add_argument("--low_alpha", default=4, type=int)
-    parser.add_argument("--high_alpha", default=16, type=int)
+    parser.add_argument("--low_alpha", default=2, type=int)
+    parser.add_argument("--high_alpha", default=14, type=int)
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=384, type=int)
@@ -132,6 +132,8 @@ def train(gpu, args):
  
     for iter in range(max_step):
         print(iter)
+        if iter > 200:
+            pass
         chunk = data_gen.__next__()
         img_list = chunk
         img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)        
@@ -186,7 +188,7 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=6)
+                        cam, _, _ = model.getam(0, start_layer=9)
                         
                         # print(cam.shape, patch_aff.shape)
 
@@ -241,7 +243,8 @@ def train(gpu, args):
         # getam
         sum_cam = np.sum(cam_list, axis=0)
         norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-        
+        # norm_cam = (sum_cam) / (np.max(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
+
         # getam and cam combination
         # norm_cam = norm_cam * patch_norm_cam
         # print(norm_cam.shape)
@@ -281,7 +284,7 @@ def train(gpu, args):
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
                     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
                     cam_output = heatmap * 0.5 + ori_img * 0.5
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_cam.jpg'.format(classes[cam_class])), cam_output)
+                    # cv2.imwrite(os.path.join(args.heatmap, name + '_{}_cam.jpg'.format(classes[cam_class])), cam_output)
 
                     mask = norm_cam[cam_class,:]
                     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -289,7 +292,7 @@ def train(gpu, args):
                     cam_output = heatmap * 0.5 + ori_img * 0.5
                     cv2.imwrite(os.path.join(args.heatmap, name + '_{}_getam.jpg'.format(classes[cam_class])), cam_output)
 
-        orig_img = np.asarray(Image.open('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name)))
+        orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
         def _crf_with_alpha(cam_dict, alpha):
             v = np.array(list(cam_dict.values()))
             bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
@@ -307,11 +310,40 @@ def train(gpu, args):
 
         if args.out_la_crf is not None:
             crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
-            np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+            
+            # print(len(crf_la.keys()))
+            for i, key in enumerate(crf_la.keys()):
+                mask = crf_la[key]
+                
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
+                
+                if key == 0:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
+                else:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format(classes[key-1])), cam_output)
+
+
+
+            
+            # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
 
         if args.out_ha_crf is not None:
             crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
-            np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
+
+            for i, key in enumerate(crf_ha.keys()):
+                mask = crf_ha[key]
+                
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
+                
+                if key == 0:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
+                else:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(classes[key-1])), cam_output)
+            # np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
 
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()

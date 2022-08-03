@@ -13,11 +13,28 @@
 
 
 # infer getam
-CUDA_VISIBLE_DEVICES=6,7 \
-python infer_getam.py \
+CUDA_VISIBLE_DEVICES=0 \
+python3 infer_getam.py \
 --backbone vitb_hybrid \
 --weights weight/mirror_023_last.pth \
 --LISTpath voc12/train.txt \
 --heatmap output/getam \
 --address 9999 \
 --out_cam output/cam_npy/ \
+--IMpath /home/SENSETIME/sunweixuan/pascal/JPEGImages \
+--out_la_crf output/getam/ \
+--out_ha_crf output/getam/ \
+
+
+# infer getam 2
+# CUDA_VISIBLE_DEVICES=0 \
+# python3 infer_getam_2.py \
+# --backbone vitb_hybrid \
+# --weights weight/mirror_023_last.pth \
+# --LISTpath voc12/train.txt \
+# --heatmap output/getam \
+# --address 9999 \
+# --IMpath /home/SENSETIME/sunweixuan/pascal/JPEGImages \
+# --out_cam output/cam_npy/ \
+# --out_la_crf output/getam/ \
+# --out_ha_crf output/getam/ \

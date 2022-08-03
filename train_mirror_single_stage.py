@@ -429,9 +429,9 @@ def train(gpu, args):
                 saliency_map = saliency[batch,:]
                 saliency_map[saliency_map>0] = 1
                 original_img = original_img.transpose(1,2,0).astype(np.uint8)
-                # seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam)
-                seg_label[batch], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
-                norm_cam,  name, iter, saliency_map.data.numpy(), cut_threshold=0.9)
+                seg_label[batch] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam)
+                # seg_label[batch], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), \
+                # norm_cam,  name, iter, saliency_map.data.numpy(), cut_threshold=0.9)
             
             # train segmentation
             torch.distributed.barrier()
