@@ -16,9 +16,9 @@
 CUDA_VISIBLE_DEVICES=0,1 \
 python infer_getam.py \
 --backbone vitb_hybrid \
---weights weight/mirror_023_last.pth \
+--weights weight/mirror_025_last.pth \
 --LISTpath voc12/train.txt \
 --heatmap output/getam \
 --address 9999 \
 --out_cam output/cam_npy/ \
---start_layer 9 \
+--start_layer 10 \

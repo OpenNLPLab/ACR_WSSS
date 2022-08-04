@@ -354,15 +354,13 @@ def crf_inference(img, probs, t=10, scale_factor=1, labels=21):
     unary = unary_from_softmax(probs)
     unary = np.ascontiguousarray(unary)
 
-    img_c = np.ascontiguousarray(img)
-
     d.setUnaryEnergy(unary)
     d.addPairwiseGaussian(sxy=3/scale_factor, compat=3)
-    d.addPairwiseBilateral(sxy=80/scale_factor, srgb=13, rgbim=np.copy(img_c), compat=10)
+    d.addPairwiseBilateral(sxy=80/scale_factor, srgb=13, rgbim=np.copy(img), compat=10)
     Q = d.inference(t)
 
     return np.array(Q).reshape((n_labels, h, w))
-
+    
 
 def crf_inference_inf(img, probs, t=10, scale_factor=1, labels=21):
     import pydensecrf.densecrf as dcrf
