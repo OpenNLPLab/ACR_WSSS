@@ -345,38 +345,38 @@ def train(gpu, args):
 
         if args.out_la_crf is not None:
             crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
-            np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+            # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
 
             # print(len(crf_la.keys()))
-            # for i, key in enumerate(crf_la.keys()):
-            #     mask = crf_la[key]
+            for i, key in enumerate(crf_la.keys()):
+                mask = crf_la[key]
                 
-            #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-            #     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-            #     cam_output = heatmap * 0.5 + ori_img * 0.5
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
                 
-            #     if key == 0:
-            #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
-            #     else:
-            #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format(classes[key-1])), cam_output)
+                if key == 0:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
+                else:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format( format(classes[key-1]))), cam_output)
 
 
         # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
         if args.out_ha_crf is not None:
             crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
-            np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
+            # np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
             
-            # for i, key in enumerate(crf_ha.keys()):
-            #     mask = crf_ha[key]
+            for i, key in enumerate(crf_ha.keys()):
+                mask = crf_ha[key]
                 
-            #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-            #     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-            #     cam_output = heatmap * 0.5 + ori_img * 0.5
+                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+                cam_output = heatmap * 0.5 + ori_img * 0.5
                 
-            #     if key == 0:
-            #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
-            #     else:
-            #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(classes[key-1])), cam_output)
+                if key == 0:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
+                else:
+                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(format(classes[key-1]))), cam_output)
             
 
         torch.distributed.barrier()

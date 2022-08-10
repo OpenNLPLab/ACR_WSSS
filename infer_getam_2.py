@@ -72,8 +72,8 @@ def main():
     parser.add_argument("--heatmap",  type=str)
     parser.add_argument("--out_la_crf", default=None, type=str)
     parser.add_argument("--out_ha_crf", default=None, type=str)
-    parser.add_argument("--low_alpha", default=2, type=int)
-    parser.add_argument("--high_alpha", default=14, type=int)
+    parser.add_argument("--low_alpha", default=1, type=int)
+    parser.add_argument("--high_alpha", default=12, type=int)
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=384, type=int)
@@ -191,7 +191,7 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=6)
+                        cam, _, _ = model.getam(0, start_layer=10)
                         
                         # print(cam.shape, patch_aff.shape)
 
@@ -251,7 +251,6 @@ def train(gpu, args):
 
         
         norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-        # print(original_img.shape, norm_cam.shape)
         seg_label[0] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam, name)
 
         # norm_cam = (sum_cam) / (np.max(sum_cam, (1, 2), keepdims=True) + 1e-5 )  

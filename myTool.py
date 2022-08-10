@@ -737,7 +737,7 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
     crf_not_sure_region = np.max(crf_label_np, 0) < 0.8
     not_sure_region = np.logical_or(crf_not_sure_region, cam_not_sure_region)
 
-    crf_label[not_sure_region] = 255
+    # crf_label[not_sure_region] = 255
     
     rgb_pseudo_label = decode_segmap(crf_label, dataset="pascal")
     cv2.imwrite('output/pseudo/{}_color.png'.format(name),

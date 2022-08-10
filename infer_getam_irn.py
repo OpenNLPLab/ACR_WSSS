@@ -194,7 +194,7 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=6)
+                        cam, _, _ = model.getam(0, start_layer=10)
                         
                         # print(cam.shape, patch_aff.shape)
 
@@ -240,6 +240,9 @@ def train(gpu, args):
                 cam_list.append(torch.from_numpy(cam_up_single.copy()))
                 # cam_list.append(cam_up_single)
 
+        # print(cam_list[0].shape)
+        # print(len(cam_list))
+
         size = (W,H)
         strided_size = get_strided_size(size, 4)
         strided_up_size = get_strided_up_size(size, 16)
@@ -255,17 +258,44 @@ def train(gpu, args):
         valid_cat = torch.nonzero(label)[:, 0]
 
         strided_cam = strided_cam[valid_cat]
-        strided_cam /= F.adaptive_max_pool2d(strided_cam, (1, 1)) + 1e-5
+        # strided_cam /= F.adaptive_max_pool2d(strided_cam, (1, 1)) + 1e-5
+        
+        strided_cam = (strided_cam - torch.amin(strided_cam, (1, 2), keepdims=True)) / (torch.amax(strided_cam, (1, 2), keepdims=True) - torch.amin(strided_cam, (1, 2), keepdims=True) + 1e-5 )  
+
+
 
         highres_cam = highres_cam[valid_cat]
-        highres_cam /= F.adaptive_max_pool2d(highres_cam, (1, 1)) + 1e-5
+        # highres_cam /= F.adaptive_max_pool2d(highres_cam, (1, 1)) + 1e-5
+        highres_cam = (highres_cam - torch.amin(highres_cam, (1, 2), keepdims=True)) / (torch.amax(highres_cam, (1, 2), keepdims=True) - torch.amin(highres_cam, (1, 2), keepdims=True) + 1e-5 )  
+
+
+        # print(strided_cam.shape,  highres_cam.shape)
 
         # print(strided_cam.shape, highres_cam.shape)
 
-        np.save(os.path.join(args.irn_out_cam, name + '.npy'),
-                    {"keys": valid_cat, "cam": strided_cam.cpu().detach(), "high_res": highres_cam.cpu().detach().numpy()})
+        # np.save(os.path.join(args.irn_out_cam, name + '.npy'),
+                    # {"keys": valid_cat, "cam": strided_cam.cpu().detach(), "high_res": highres_cam.cpu().detach().numpy()})
         # np.save(os.path.join(args.cam_out_dir, name + '.npy'),
                     # {"keys": valid_cat, "cam": strided_cam.cpu(), "high_res": highres_cam.cpu().numpy()})
+
+
+        # heatmap
+        
+        # cam_dict = {}
+        ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
+        for cam_class in range(highres_cam.shape[0]):
+            # cam_dict[cam_class] = highres_cam[cam_class]
+            mask = highres_cam[cam_class,:]
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+            cam_output = heatmap * 0.5 + ori_img * 0.5
+            cv2.imwrite(os.path.join('output/irn', name + '_{}_high.jpg'.format(classes[cam_class])), cam_output)
+
+            mask = strided_cam[cam_class,:]
+            heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+            ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+            cam_output = heatmap * 0.5 + ori_img * 0.5
+            cv2.imwrite(os.path.join('output/irn', name + '_{}_strided.jpg'.format(classes[cam_class])), cam_output)
 
 
         # # patch cam
@@ -349,7 +379,7 @@ def train(gpu, args):
     # torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="3"
+    # os.environ["CUDA_VISIBLE_DEVICES"]="3"
 
     main()
 

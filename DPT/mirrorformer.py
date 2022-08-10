@@ -280,6 +280,7 @@ class MirrorFormer(DPT):
             grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
             
             cam = grad * cam 
+            # cam = grad
             cam = cam.clamp(min=0).mean(dim=0)
             
             positive_grad = grad.clamp(min=0).mean(dim=0)
