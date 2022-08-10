@@ -3,7 +3,7 @@
 # CUDA_VISIBLE_DEVICES=4,5,6,7 \
 # python train_mirror.py \
 # --backbone vitb_hybrid \
-# --session_name mirror_025 \
+# --session_name mirror_029 \
 # --lr 0.05 \
 # --IMpath /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages \
 # --batch_size 1 \
@@ -12,7 +12,10 @@
 # --max_epoches 15
 
 
+
+
 # infer getam
+<<<<<<< Updated upstream
 # CUDA_VISIBLE_DEVICES=0 \
 # python3 infer_getam.py \
 # --backbone vitb_hybrid \
@@ -31,6 +34,10 @@
 
 CUDA_VISIBLE_DEVICES=0 \
 python3 infer_getam_irn.py \
+=======
+CUDA_VISIBLE_DEVICES=0 \
+python infer_getam.py \
+>>>>>>> Stashed changes
 --backbone vitb_hybrid \
 --weights weight/mirror_029_last.pth \
 --LISTpath voc12/train.txt \

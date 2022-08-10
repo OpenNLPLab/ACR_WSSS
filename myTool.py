@@ -1188,7 +1188,7 @@ def get_data_from_chunk_v2(chunk, args):
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
         img_temp, cropping = RandomCrop(img_temp, dim)
-        img_temp = hide_patch(img_temp)
+        # img_temp = hide_patch(img_temp)
 
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
@@ -1519,7 +1519,6 @@ for index, item in enumerate(coco_classes):
 def get_coco_cls_label(name):
     label_txt = open('/home/users/u5876230/coco/annotations/bbx/' + name + '.txt')
     label = label_txt.readlines()[0:]
-    # print(name, label)
     # label_list = []
 
     multi_cls_lab = np.zeros((80), np.float32)
@@ -1601,7 +1600,7 @@ def get_data_from_chunk_coco(chunk, args):
 
 def get_data_from_chunk_coco_val(chunk, args):
     # print(chunk)
-    img_path = args.IMpath
+    img_path = '/home/users/u5876230/coco/val2014/'
 
     scale = np.random.uniform(0.7, 1.3)
 
@@ -1615,16 +1614,20 @@ def get_data_from_chunk_coco_val(chunk, args):
     for i, piece in enumerate(chunk):
         piece = piece.split('.')[0]
         cls_label = get_coco_cls_label(piece)
-        assert(np.sum(cls_label)>0)
+        # assert(np.sum(cls_label)>0)
+        if np.sum(cls_label)>0:
+            cls_label[np.random.randint(0,80)] = 1
 
-        # print(cls_label)
+        # cls_label
         labels.append(cls_label)
 
         name_list.append(piece)
+        # print(os.path.join(img_path, piece + '.jpg'))
+        # print(os.path.isfile(os.path.join(img_path, piece + '.jpg')))
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
 
-        img_temp =  cv2.resize(img_temp, (256,256))
+        img_temp = cv2.resize(img_temp, (dim, dim))
 
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224

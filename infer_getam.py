@@ -325,24 +325,25 @@ def train(gpu, args):
                     cv2.imwrite(os.path.join(args.heatmap, name + '_{}_getam.jpg'.format(classes[cam_class])), cam_output)
 
 
-
-        orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
+# -------------
+        # orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
         
-        def _crf_with_alpha(cam_dict, alpha):
-            v = np.array(list(cam_dict.values()))
-            bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
-            bgcam_score = np.concatenate((bg_score, v), axis=0)
-            crf_score = imutils.crf_inference(orig_img, bgcam_score, labels=bgcam_score.shape[0])
+        # def _crf_with_alpha(cam_dict, alpha):
+        #     v = np.array(list(cam_dict.values()))
+        #     bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
+        #     bgcam_score = np.concatenate((bg_score, v), axis=0)
+        #     crf_score = imutils.crf_inference(orig_img, bgcam_score, labels=bgcam_score.shape[0])
 
-            n_crf_al = dict()
+        #     n_crf_al = dict()
 
-            n_crf_al[0] = crf_score[0]
-            for i, key in enumerate(cam_dict.keys()):
-                n_crf_al[key+1] = crf_score[i+1]
+        #     n_crf_al[0] = crf_score[0]
+        #     for i, key in enumerate(cam_dict.keys()):
+        #         n_crf_al[key+1] = crf_score[i+1]
 
-            return n_crf_al
+        #     return n_crf_al
 
 
+<<<<<<< Updated upstream
         if args.out_la_crf is not None:
             crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
             # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
@@ -377,6 +378,42 @@ def train(gpu, args):
                     cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
                 else:
                     cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(format(classes[key-1]))), cam_output)
+=======
+        # if args.out_la_crf is not None:
+        #     crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
+        #     np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+
+        #     # print(len(crf_la.keys()))
+        #     # for i, key in enumerate(crf_la.keys()):
+        #     #     mask = crf_la[key]
+                
+        #     #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        #     #     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+        #     #     cam_output = heatmap * 0.5 + ori_img * 0.5
+                
+        #     #     if key == 0:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
+        #     #     else:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format(classes[key-1])), cam_output)
+
+
+        # # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+        # if args.out_ha_crf is not None:
+        #     crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
+        #     np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
+            
+        #     # for i, key in enumerate(crf_ha.keys()):
+        #     #     mask = crf_ha[key]
+                
+        #     #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        #     #     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+        #     #     cam_output = heatmap * 0.5 + ori_img * 0.5
+                
+        #     #     if key == 0:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
+        #     #     else:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(classes[key-1])), cam_output)
+>>>>>>> Stashed changes
             
 
         torch.distributed.barrier()

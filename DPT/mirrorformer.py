@@ -176,7 +176,8 @@ class DPT(BaseModel):
             attn = blk.attn.get_attn()
             attn = torch.mean(attn, dim=1)
             attn_list.append(attn)
-        cls_attn_sum = torch.stack(attn_list, dim=1)
+        cls_attn_sum = torch.stack(attn_list, dim=1) # b*layer*h*w
+        # print(cls_attn_sum.shape)
 
         x_bkg_cls = None
 
@@ -279,8 +280,13 @@ class MirrorFormer(DPT):
             cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
             grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
             
+<<<<<<< Updated upstream
             cam = grad * cam 
             # cam = grad
+=======
+            # cam = grad * cam 
+            cam = grad
+>>>>>>> Stashed changes
             cam = cam.clamp(min=0).mean(dim=0)
             
             positive_grad = grad.clamp(min=0).mean(dim=0)
