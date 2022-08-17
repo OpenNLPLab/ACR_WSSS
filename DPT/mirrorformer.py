@@ -268,7 +268,7 @@ class MirrorFormer(DPT):
         return [x_cls_1, x_cls_2, x_p_cls_1, x_p_cls_2, x_bkg_cls_1, x_bkg_cls_2], [attn1, attn2]
 
     # "GETAM" cam * gradient^2
-    def getam(self, batch, start_layer=0):
+    def getam(self, batch, start_layer=0, func = 'cam_grad_s'):
         cam_list = []
         attn_list = []
         grad_list = []
@@ -280,29 +280,28 @@ class MirrorFormer(DPT):
             cam = cam[batch].reshape(-1, cam.shape[-1], cam.shape[-1])
             grad = grad[batch].reshape(-1, grad.shape[-1], grad.shape[-1])
             
-<<<<<<< Updated upstream
-            cam = grad * cam 
-            # cam = grad
-=======
-            # cam = grad * cam 
-            cam = grad
->>>>>>> Stashed changes
-            cam = cam.clamp(min=0).mean(dim=0)
-            
-            positive_grad = grad.clamp(min=0).mean(dim=0)
-            cam = cam * positive_grad
+            if func == 'cam_grad_s':
+                cam = grad * cam 
+                cam = cam.clamp(min=0).mean(dim=0)
+                positive_grad = grad.clamp(min=0).mean(dim=0)
+                cam = cam * positive_grad 
+            elif func == 'grad':
+                cam = grad
+                cam = cam.clamp(min=0).mean(dim=0)
+            elif func == 'grad_s':
+                cam = grad
+                cam = cam.clamp(min=0).mean(dim=0)
+                positive_grad = grad.clamp(min=0).mean(dim=0)
+                cam = cam * positive_grad
 
             cam_list.append(cam.unsqueeze(0))
 
-        # rollout = compute_rollout_attention(cams, start_layer=start_layer)
         cam_list = cam_list[start_layer:]
         cams = torch.stack(cam_list).sum(dim=0)
         if self.cur_backbone == 'deitb16_distil_384':
             cls_cam = torch.relu(cams[:, 0, 2:])
         else:
             cls_cam = torch.relu(cams[:, 0, 1:])
-        # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
-        # attn_map = torch.relu(cams[:,1:,1:])
 
         return cls_cam, attn_list, cam_list
 

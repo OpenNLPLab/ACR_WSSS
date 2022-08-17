@@ -358,8 +358,8 @@ def train(gpu, args):
 
             # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item(), intra_frg_bkg_loss.item())
 
-            loss = cls_loss_1 + cls_loss_2 + \
-                cls_align_loss*100 + aff_align_loss*100 \
+            loss = cls_loss_1 #+ cls_loss_2 + \
+                #cls_align_loss*100 + aff_align_loss*100 \
                     # + bkg_loss_1 + bkg_loss_2  \
                     #    + intra_frg_bkg_loss * 0.1 
                     # + bkg_align_loss*1000 \

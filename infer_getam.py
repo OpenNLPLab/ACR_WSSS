@@ -91,6 +91,7 @@ def main():
     parser.add_argument("--low_alpha", default=1, type=int)
     parser.add_argument("--high_alpha", default=12, type=int)
     parser.add_argument("--start_layer", default=9, type=int)
+    parser.add_argument("--getam_func", default='cam_grad_s', type=str, choices=['grad', 'grad_s', 'cam_grad_s'])
 
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
@@ -188,12 +189,10 @@ def train(gpu, args):
                 if hflip%2 == 1:
                     patch_cam = np.flip(patch_cam, axis=-1)
 
-                # print(cam.shape)
                 patch_cam_list.append(patch_cam)
 
                 patch_aff = attn[:,:,1:,1:]
                 patch_aff = torch.sum(patch_aff, dim=1)
-                # print(patch_aff.shape)
             
                 original_img = ori_images[0]
                 cur_label = label[0, :]
@@ -207,24 +206,18 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=args.start_layer)
+                        cam, _, _ = model.getam(0, start_layer=args.start_layer, func = args.getam_func)
                         
-                        # print(cam.shape, patch_aff.shape)
-
                         # patch aff refine
                         cam = torch.matmul(patch_aff, cam.unsqueeze(2))
                         # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
                         # print(cam.shape)
 
                         cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
-
-                        # print(cam.shape)
                         
                         # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
                         # print(cam.shape)
                         # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
-
-                        # print(cam.shape)
                         
                         cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                         cam_matrix[0, class_index,:,:] = cam
@@ -233,7 +226,6 @@ def train(gpu, args):
                     # cam_matrix=flipper1(cam_matrix)
 
                 cam_up_single = cam_matrix[0,:,:,:]
-                # print(cam_up_single.shape)
                 rgb_img = rgb_img.transpose(2,0,1)
 
                 # pamr ---------------------
@@ -253,7 +245,6 @@ def train(gpu, args):
         # patch cam
         patch_sum_cam = np.sum(patch_cam_list, axis=0)
         patch_norm_cam = (patch_sum_cam - np.min(patch_sum_cam, (1, 2), keepdims=True)) / (np.max(patch_sum_cam, (1, 2), keepdims=True) - np.min(patch_sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-        # print(patch_norm_cam.shape)
         patch_cam_dict = {}
         for cam_class in range(20):
             if cur_label[cam_class] > 1e-5:
@@ -300,13 +291,11 @@ def train(gpu, args):
                 np.save(os.path.join(folder, name + '.npy'), crf)
 
 
-
         if args.out_cam is not None:
             np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
 
         ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
-        # ori_img = rgb_img.transpose(1,2,0)
-        # print(ori_img.shape, rgb_img.shape)
+
         
         # heatmap
         if args.heatmap is not None:
@@ -343,7 +332,7 @@ def train(gpu, args):
         #     return n_crf_al
 
 
-<<<<<<< Updated upstream
+
         if args.out_la_crf is not None:
             crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
             # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
@@ -378,7 +367,7 @@ def train(gpu, args):
                     cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
                 else:
                     cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(format(classes[key-1]))), cam_output)
-=======
+
         # if args.out_la_crf is not None:
         #     crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
         #     np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
@@ -397,6 +386,26 @@ def train(gpu, args):
         #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format(classes[key-1])), cam_output)
 
 
+
+        # if args.out_la_crf is not None:
+        #     crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
+        #     np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+
+        #     # print(len(crf_la.keys()))
+        #     # for i, key in enumerate(crf_la.keys()):
+        #     #     mask = crf_la[key]
+                
+        #     #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        #     #     ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+        #     #     cam_output = heatmap * 0.5 + ori_img * 0.5
+                
+        #     #     if key == 0:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
+        #     #     else:
+        #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format(classes[key-1])), cam_output)
+
+
+
         # # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
         # if args.out_ha_crf is not None:
         #     crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
@@ -413,9 +422,8 @@ def train(gpu, args):
         #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
         #     #     else:
         #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(classes[key-1])), cam_output)
->>>>>>> Stashed changes
-            
 
+            
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()
 

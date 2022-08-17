@@ -273,8 +273,8 @@ def train(gpu, args):
 
         # print(strided_cam.shape, highres_cam.shape)
 
-        # np.save(os.path.join(args.irn_out_cam, name + '.npy'),
-                    # {"keys": valid_cat, "cam": strided_cam.cpu().detach(), "high_res": highres_cam.cpu().detach().numpy()})
+        np.save(os.path.join(args.irn_out_cam, name + '.npy'),
+                    {"keys": valid_cat, "cam": strided_cam.cpu().detach(), "high_res": highres_cam.cpu().detach().numpy()})
         # np.save(os.path.join(args.cam_out_dir, name + '.npy'),
                     # {"keys": valid_cat, "cam": strided_cam.cpu(), "high_res": highres_cam.cpu().numpy()})
 
