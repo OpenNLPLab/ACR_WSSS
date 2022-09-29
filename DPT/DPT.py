@@ -263,10 +263,7 @@ class DPT(BaseModel):
         path_1 = self.cam_module(path_1)
         out = self.scratch.output_conv(path_1)
 
-        # path_1_feature = path_1.clone()
-        # high_img_feature = self.embedding_layer(path_1_feature)
-
-        return x_cls, out, path_1
+        return x_cls, out
     
     def forward_seg(self,x):
         raw_x = x
@@ -298,7 +295,7 @@ class DPT(BaseModel):
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
-        layer_1, layer_2, layer_3, layer_4, x_cls, _ = forward_vit(self.pretrained, x)
+        _,_,_,_, x_cls, _ = forward_vit(self.pretrained, x)
         
         # x_cls = layer_4.clone()
         # if self.use_gap:
@@ -311,34 +308,17 @@ class DPT(BaseModel):
 
         x_cls = self.cls_head(x_cls)
 
-        attn_list = []
-        for blk in self.pretrained.model.blocks:
-            attn = blk.attn.get_attn()
-            # print(attn.shape)
-            attn = torch.mean(attn, dim=1)
-            # print(attn.shape)
-            attn_list.append(attn)
-
-        cls_attn_sum = torch.stack(attn_list, dim=1)
-        # print('cls_attn_sum', cls_attn_sum.shape)
-        # cls_attn_sum = cls_attn_sum.sum(dim=1)
-
-        return x_cls, cls_attn_sum
-
-        # get attention map
-        # cams = []
-        # cls_attn_list = []
+        # attn_list = []
         # for blk in self.pretrained.model.blocks:
-        #     cam = blk.attn.get_attn()
-        #     # print(cam.)
-        #     cam = torch.mean(cam, dim=1)
-        #     cls_attn = cam[:, 0, 1:]
-        #     cls_attn = cls_attn.reshape(-1, 16, 16)
-        #     cls_attn_list.append(cls_attn)
-        # cls_attn_sum = torch.stack(cls_attn_list, dim=1)
+        #     attn = blk.attn.get_attn()
+        #     attn = torch.mean(attn, dim=1)
+        #     attn_list.append(attn)
+
+        # cls_attn_sum = torch.stack(attn_list, dim=1)
         # cls_attn_sum = cls_attn_sum.sum(dim=1)
 
-        # return x_cls, cls_attn_sum
+        return x_cls
+
 
     def forward_cam(self, x):
         if self.channels_last == True:
@@ -436,13 +416,6 @@ class DPTSegmentationModel(DPT):
         # cam_list = [cam2, cam3, cam1]
         return x_cls, res_cam
     
-    def forward_mirror(self, x1, x2):
-        x_cls_1, attn1 = super().forward_cls(x1)
-        x_cls_2, attn2 = super().forward_cls(x2)
-
-        return x_cls_1, x_cls_2, attn1, attn2
-
-    
     # old method 
     def generate_cam(self, batch, start_layer=0):
         cams = []
@@ -485,6 +458,8 @@ class DPTSegmentationModel(DPT):
             cam = cam * positive_grad
 
             cam_list.append(cam.unsqueeze(0))
+            # if 12 - len(cam_list) == start_layer:
+                # break 
 
         # rollout = compute_rollout_attention(cams, start_layer=start_layer)
         cam_list = cam_list[start_layer:]
@@ -495,7 +470,6 @@ class DPTSegmentationModel(DPT):
             cls_cam = torch.relu(cams[:, 0, 1:])
         # cls_cam = torch.relu(cams[:, 0, 2:]) # ditilled
         attn_map = torch.relu(cams[:,1:,1:])
-        # print(cls_cam.shape, attn_map.shape)
 
         return cls_cam, attn_list, cam_list, attn_map
         

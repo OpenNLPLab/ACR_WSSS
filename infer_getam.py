@@ -24,7 +24,7 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 # import seaborn as sns
 import matplotlib.pyplot as plt
-
+from myTool import decode_segmap
 
 
 import visdom
@@ -46,7 +46,7 @@ def _crf_with_alpha(cam_dict, alpha, orig_img):
     bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
     bgcam_score = np.concatenate((bg_score, v), axis=0)
     crf_score = imutils.crf_inference(orig_img, bgcam_score, labels=bgcam_score.shape[0])
-
+    
     n_crf_al = dict()
 
     n_crf_al[0] = crf_score[0]
@@ -91,7 +91,10 @@ def main():
     parser.add_argument("--low_alpha", default=1, type=int)
     parser.add_argument("--high_alpha", default=12, type=int)
     parser.add_argument("--start_layer", default=9, type=int)
-    parser.add_argument("--getam_func", default='cam_grad_s', type=str, choices=['grad', 'grad_s', 'cam_grad_s'])
+    parser.add_argument("--getam_func", default='cam_grad_s', type=str, choices=['grad', 'grad_s', 'cam_grad_s', 'cam_grad'])
+    parser.add_argument("--pseudo", default=None, type=str)
+    parser.add_argument("--aff", default=False, type=bool)
+    parser.add_argument("--recam", default=False, type=bool)  
 
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
@@ -118,21 +121,19 @@ def main():
 def train(gpu, args):
     # vis = visdom.Visdom()
     rank = args.nr * args.gpus + gpu
-    print(rank)
+    # print(rank)
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
     setup(rank)
-
     # model = DPTSegmentationModel(num_classes=20, backbone_name=args.backbone)
     model = MirrorFormer(num_classes=20, backbone_name=args.backbone) 
-
     weights_dict = torch.load(args.weights)
     model.load_state_dict(weights_dict, strict=False)
 
     model.eval()
     model.cuda()
-
+    
     # pixel adaptive refine module
-    # pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
+    pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
 
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu],output_device=[gpu], find_unused_parameters=True)
 
@@ -149,9 +150,15 @@ def train(gpu, args):
     data_gen = mytool.chunker(img_list, 1)
 
     timer = pyutils.Timer("Session started: ")
- 
+    
+    print('generating cam...')
+
+    f1 = open('1_class.txt', 'w') 
+    f2 = open('2_class.txt', 'w') 
+
     for iter in range(max_step):
         print(iter)
+
         if iter > 200:
             pass
         chunk = data_gen.__next__()
@@ -160,9 +167,20 @@ def train(gpu, args):
         img = img.cuda(non_blocking=True)
         label = label.cuda(non_blocking=True)
         
+        
         # img = flipper1(img)
         # ori_images = np.flip(ori_images, axis = 3)
         name = name_list[0]
+
+        recam = np.load('/data/u5876230/recam/recam/{}.npy'.format(name), allow_pickle=True).item()["high_res"]
+        # baseline_cam = np.load('/data/u5876230/baseline_cam/{}.npy'.format(name), allow_pickle=True)
+
+        # if torch.sum(label) ==1:
+        #     f1.writelines('{}\n'.format(name))
+        # elif torch.sum(label) ==2:
+        #     f2.writelines('{}\n'.format(name))
+        # continue
+
         # rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
         rgb_img = cv2.imread('{}/{}.jpg'.format(args.IMpath, name))
         W,H,_ = rgb_img.shape
@@ -197,6 +215,7 @@ def train(gpu, args):
                 original_img = ori_images[0]
                 cur_label = label[0, :]
                 output = cls_pred[0, :]
+                cat_index = 0
                 for class_index in range(20):
                     if cur_label[class_index] > 1e-5:
                         one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
@@ -208,18 +227,31 @@ def train(gpu, args):
                         one_hot.backward(retain_graph=True)
                         cam, _, _ = model.getam(0, start_layer=args.start_layer, func = args.getam_func)
                         
-                        # patch aff refine
-                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
-                        # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
-                        # print(cam.shape)
+                        #recam refine
+                        if args.recam:
+                            recam_map = (torch.from_numpy(recam[cat_index]).cuda())
+                            if hflip==1:
+                                recam_map=flipper1(recam_map)
+                            recam_map = F.interpolate(recam_map.unsqueeze(0).unsqueeze(0), (int((h*scale) //16), int((w*scale) //16)), mode='bilinear', align_corners=True)
+                            recam_map = recam_map.view(1,cam.shape[1])
+                            cam = cam * recam_map
+                            # cam = recam_map
+                            cat_index += 1
+                        
+                        # patch aff refine ============================
+                        if args.aff:
+                            # print('yes')
+                            cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                        # =============================================
 
                         cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
                         
                         # cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (args.crop_size, args.crop_size), mode='bilinear', align_corners=True)
-                        # print(cam.shape)
                         # cam = cam[:,:,crop_list[0]:crop_list[0]+crop_list[1], crop_list[2]:crop_list[2]+crop_list[3]]
                         
                         cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                        
+
                         cam_matrix[0, class_index,:,:] = cam
                 
                 # if hflip==1:
@@ -227,9 +259,9 @@ def train(gpu, args):
 
                 cam_up_single = cam_matrix[0,:,:,:]
                 rgb_img = rgb_img.transpose(2,0,1)
-
+                
                 # pamr ---------------------
-                # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                # cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
                 # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
                 # cam_up_single = cam_up_single[0]
                 # --------------------------
@@ -278,9 +310,8 @@ def train(gpu, args):
         for cam_class in range(20):
             if cur_label[cam_class] > 1e-5:
                 cam_dict[cam_class] = norm_cam[cam_class]
-
-        
-        # orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
+    
+        orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
         if args.out_crf is not None:
             for t in [args.low_alpha, args.high_alpha]:
                 orig_image = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
@@ -290,13 +321,10 @@ def train(gpu, args):
                     os.makedirs(folder)
                 np.save(os.path.join(folder, name + '.npy'), crf)
 
-
         if args.out_cam is not None:
             np.save(os.path.join(args.out_cam, name + '.npy'), cam_dict)
-
         ori_img = ori_images[0].transpose(1, 2, 0).astype(np.uint8)
 
-        
         # heatmap
         if args.heatmap is not None:
             for cam_class in range(20):
@@ -316,7 +344,6 @@ def train(gpu, args):
 
 # -------------
         # orig_img = np.asarray(Image.open(os.path.join(args.IMpath,'{}.jpg'.format(name))))
-        
         # def _crf_with_alpha(cam_dict, alpha):
         #     v = np.array(list(cam_dict.values()))
         #     bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), alpha)
@@ -331,42 +358,63 @@ def train(gpu, args):
 
         #     return n_crf_al
 
+        # directly generate pseudo label
+        
+        # if args.pseudo is not None:
+        #     v = np.array(list(cam_dict.values()))
+        #     # bg_score = np.power(1 - np.max(v, axis=0, keepdims=True), 10)
+        #     bg_score = np.ones((1, v.shape[1], v.shape[2]))*0.55
+        #     # print(v.shape)
+        #     # print(bg_score.shape, v.shape)
+        #     bgcam_score = np.concatenate((bg_score, v), axis=0)
+        #     crf_score = imutils.crf_inference(orig_img, bgcam_score, labels=bgcam_score.shape[0])
+        #     # print(crf_score.shape)
+        #     pseudo = np.zeros((21,crf_score.shape[1], crf_score.shape[2]))
+        #     pseudo[0,:,:] = crf_score[0,:,:]
+        #     for i, key in enumerate(cam_dict.keys()):
+        #         pseudo[key+1,:,:] = crf_score[i+1,:,:]
+        #     pseudo = np.argmax(pseudo, axis=0)
+        #     # print(pseudo.shape)
+        #     # print(np.unique(pseudo))
+        #     # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
+        #     rgb_pseudo_label = decode_segmap(pseudo, dataset="pascal")
+        #     cv2.imwrite('output/pseudo/{}_color.png'.format(name),
+        #                 (rgb_pseudo_label * 255).astype('uint8') * 0.7 + orig_img * 0.3)
+        
+        # if args.out_la_crf is not None:
+        #     crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
+        #     # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
 
-
-        if args.out_la_crf is not None:
-            crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
-            # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
-
-            # print(len(crf_la.keys()))
-            for i, key in enumerate(crf_la.keys()):
-                mask = crf_la[key]
+        #     # print(len(crf_la.keys()))
+        #     for i, key in enumerate(crf_la.keys()):
+        #         mask = crf_la[key]
                 
-                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-                cam_output = heatmap * 0.5 + ori_img * 0.5
+        #         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        #         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+        #         cam_output = heatmap * 0.5 + ori_img * 0.5
                 
-                if key == 0:
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
-                else:
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format( format(classes[key-1]))), cam_output)
+        #         if key == 0:
+        #             pass
+        #             # cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_la.jpg'), cam_output)
+        #         else:
+        #             cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_la.jpg'.format( format(classes[key-1]))), cam_output)
 
-
-        # np.save(os.path.join(args.out_la_crf, name + '.npy'), crf_la)
-        if args.out_ha_crf is not None:
-            crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
-            # np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
+        # if args.out_ha_crf is not None:
+        #     crf_ha = _crf_with_alpha(cam_dict, args.high_alpha)
+        #     # np.save(os.path.join(args.out_ha_crf, name + '.npy'), crf_ha)
             
-            for i, key in enumerate(crf_ha.keys()):
-                mask = crf_ha[key]
+        #     for i, key in enumerate(crf_ha.keys()):
+        #         mask = crf_ha[key]
                 
-                heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-                ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
-                cam_output = heatmap * 0.5 + ori_img * 0.5
+        #         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+        #         ori_img = cv2.resize(ori_img, (heatmap.shape[1], heatmap.shape[0]))
+        #         cam_output = heatmap * 0.5 + ori_img * 0.5
                 
-                if key == 0:
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
-                else:
-                    cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(format(classes[key-1]))), cam_output)
+        #         if key == 0:
+        #             pass
+        #             # cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
+        #         else:
+        #             cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(format(classes[key-1]))), cam_output)
 
         # if args.out_la_crf is not None:
         #     crf_la = _crf_with_alpha(cam_dict, args.low_alpha)
@@ -422,7 +470,7 @@ def train(gpu, args):
         #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_bkg_crf_ha.jpg'), cam_output)
         #     #     else:
         #     #         cv2.imwrite(os.path.join(args.heatmap, name + '_{}_crf_ha.jpg'.format(classes[key-1])), cam_output)
-
+            
             
         torch.distributed.barrier()
     torch.distributed.destroy_process_group()

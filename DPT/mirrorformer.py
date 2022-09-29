@@ -120,7 +120,7 @@ class DPT(BaseModel):
 
         # classification head
         self.cls_head = nn.Linear(768, self.num_class)
-        self.cls_head_2 = nn.Linear(768, self.num_class)
+        # self.cls_head_2 = nn.Linear(768, self.num_class)
         # self.classifier = nn.Conv2d(768, self.num_class, kernel_size=1, bias=False)
 
         self.use_gap = True
@@ -167,7 +167,7 @@ class DPT(BaseModel):
         x_patch = layer_4[:, 1:, :]
 
         x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
-        x_patch_cls = self.cls_head_2(x_patch_cls)
+        x_patch_cls = self.cls_head(x_patch_cls)
 
         x_cls = self.cls_head(x_cls)
 
@@ -177,14 +177,12 @@ class DPT(BaseModel):
             attn = torch.mean(attn, dim=1)
             attn_list.append(attn)
         cls_attn_sum = torch.stack(attn_list, dim=1) # b*layer*h*w
-        # print(cls_attn_sum.shape)
 
         x_bkg_cls = None
 
         return x_cls, x_patch_cls, cls_attn_sum, x_bkg_cls
 
     def forward_cam(self, x):
-    
         if self.channels_last == True:
             x.contiguous(memory_format=torch.channels_last)
 
@@ -197,9 +195,9 @@ class DPT(BaseModel):
         x_cls = self.cls_head(x_cls)
 
         x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
-        x_patch_cls = self.cls_head_2(x_patch_cls)
+        x_patch_cls = self.cls_head(x_patch_cls)
 
-        x_patch_cam = self.cls_head_2(x_patch)
+        x_patch_cam = self.cls_head(x_patch)
         x_patch_cam = F.relu(x_patch_cam)
 
         attn_list = []
@@ -211,7 +209,6 @@ class DPT(BaseModel):
 
         return x_cls, x_patch_cls, cls_attn_sum, x_patch_cam
     
-
 
 
 
@@ -268,7 +265,7 @@ class MirrorFormer(DPT):
         return [x_cls_1, x_cls_2, x_p_cls_1, x_p_cls_2, x_bkg_cls_1, x_bkg_cls_2], [attn1, attn2]
 
     # "GETAM" cam * gradient^2
-    def getam(self, batch, start_layer=0, func = 'cam_grad_s'):
+    def getam(self, batch, start_layer=0, func = 'grad'):
         cam_list = []
         attn_list = []
         grad_list = []
@@ -285,6 +282,9 @@ class MirrorFormer(DPT):
                 cam = cam.clamp(min=0).mean(dim=0)
                 positive_grad = grad.clamp(min=0).mean(dim=0)
                 cam = cam * positive_grad 
+            if func == 'cam_grad':
+                cam = grad * cam 
+                cam = cam.clamp(min=0).mean(dim=0)
             elif func == 'grad':
                 cam = grad
                 cam = cam.clamp(min=0).mean(dim=0)
@@ -358,7 +358,7 @@ class MirrorFormer_SingleStage(DPT):
         layer_1, layer_2, layer_3, layer_4, x_cls, x_patch = forward_vit(self.pretrained, x)
 
         x_patch_cls = F.avg_pool1d(x_patch.permute(0,2,1), kernel_size=x_patch.shape[1])[:,:,0]
-        x_patch_cls = self.cls_head_2(x_patch_cls)
+        x_patch_cls = self.cls_head(x_patch_cls)
         x_cls = self.cls_head(x_cls)
 
         layer_1_rn = self.scratch.layer1_rn(layer_1)

@@ -188,7 +188,7 @@ def compute_seg_label_2(ori_img, cam_label, norm_cam, name, iter, saliency, cls_
     return crf_label, saliency
 
 # use this 
-def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, save_heatmap=False, cut_threshold = 0.9):
+def compute_seg_label_3(ori_img, cam_label, norm_cam, name, saliency, save_heatmap=False, cut_threshold = 0.9):
     ori_img = cv2.cvtColor(ori_img, cv2.COLOR_BGR2RGB)
     cam_label = cam_label.astype(np.uint8)
 
@@ -217,7 +217,7 @@ def compute_seg_label_3(ori_img, cam_label, norm_cam, name, iter, saliency, save
 
     _, h, w = norm_cam.shape
     
-    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.power(1 - np.max(cam_np, 0), 12)
     bg_score = np.expand_dims(bg_score, axis=0)
     cam_all = np.concatenate((bg_score, cam_np))
 
@@ -687,12 +687,12 @@ def compute_seg_label_rrm(ori_img, cam_label, norm_cam, name):
     # save heatmap
     img = ori_img
     keys = list(cam_dict.keys())
-    for target_class in keys:
-        mask = cam_dict[target_class]
-        heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
-        img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
-        cam_output = heatmap * 0.5 + img * 0.5
-        cv2.imwrite(os.path.join('output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
+    # for target_class in keys:
+    #     mask = cam_dict[target_class]
+    #     heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+    #     img = cv2.resize(img, (heatmap.shape[1], heatmap.shape[0]))
+    #     cam_output = heatmap * 0.5 + img * 0.5
+    #     cv2.imwrite(os.path.join('output/heatmap/', name + '_{}.jpg'.format(classes[target_class])), cam_output)
 
     bg_score = np.power(1 - np.max(cam_np, 0), 36)
     # bg_score = 0.37

@@ -463,7 +463,6 @@ class VisionTransformer(nn.Module):
         x = self.patch_embed.proj(x)
         x = x.flatten(2).transpose(1, 2)
 
-        # print(self.dist_token)
         if hasattr(self, "dist_token") and torch.is_tensor(self.dist_token):
             cls_tokens = self.cls_token.expand(
                 B, -1, -1
@@ -506,8 +505,6 @@ class VisionTransformer(nn.Module):
     
 
     def _resize_pos_embed_2(self, posemb, gs_h, gs_w):
-        # print(self.start_index)
-        # print(posemb.shape)
         posemb_tok, posemb_grid = (
             posemb[:, : self.start_index],
             posemb[0, self.start_index:],

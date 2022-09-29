@@ -75,6 +75,8 @@ def main():
     parser.add_argument("--weights", default='./netWeights/RRM_final.pth', type=str)
     parser.add_argument("--out_cam", default='/home/users/u5876230/mirror/output/cam_npy', type=str)
     parser.add_argument("--irn_out_cam", default='/home/users/u5876230/mirror/output/cam_npy', type=str)
+    parser.add_argument("--start_layer", default=10, type=int)
+    parser.add_argument("--getam_func", default='cam_grad_s', type=str, choices=['grad', 'grad_s', 'cam_grad_s'])
 
     parser.add_argument("--heatmap", default='output/baseline', type=str)
     parser.add_argument("--out_la_crf", default=None, type=str)
@@ -149,6 +151,8 @@ def train(gpu, args):
         # img = flipper1(img)
         # ori_images = np.flip(ori_images, axis = 3)
         name = name_list[0]
+        recam = np.load('/data/u5876230/recam/{}.npy'.format(name), allow_pickle=True).item()["high_res"]
+
         # rgb_img = cv2.imread('/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages/{}.jpg'.format(name))
         rgb_img = cv2.imread('{}/{}.jpg'.format(args.IMpath, name))
         W,H,_ = rgb_img.shape
@@ -185,6 +189,7 @@ def train(gpu, args):
                 original_img = ori_images[0]
                 cur_label = label
                 output = cls_pred[0, :]
+                cat_index = 0
                 for class_index in range(20):
                     if cur_label[class_index] > 1e-5:
                         one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
@@ -194,14 +199,20 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=10)
+                        cam, _, _ = model.getam(0, start_layer=args.start_layer, func = args.getam_func)
                         
-                        # print(cam.shape, patch_aff.shape)
+                        #recam refine
+                        recam_map = (torch.from_numpy(recam[cat_index]).cuda())
+                        if hflip==1:
+                            recam_map=flipper1(recam_map)
+                        recam_map = F.interpolate(recam_map.unsqueeze(0).unsqueeze(0), (int((h*scale) //16), int((w*scale) //16)), mode='bilinear', align_corners=True)
+                        recam_map = recam_map.view(1,cam.shape[1])
+                        # print(recam_map.shape, cam.shape)
+                        cam = cam * recam_map
+                        # cam = recam_map
 
                         # patch aff refine
-                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
-                        # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
-                        # print(cam.shape)
+                        # cam = torch.matmul(patch_aff, cam.unsqueeze(2))
 
                         cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
 
@@ -224,9 +235,9 @@ def train(gpu, args):
                 rgb_img = rgb_img.transpose(2,0,1)
 
                 # pamr ---------------------
-                # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
-                # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
-                # cam_up_single = cam_up_single[0]
+                cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                cam_up_single = cam_up_single[0]
                 # --------------------------
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
@@ -261,8 +272,6 @@ def train(gpu, args):
         # strided_cam /= F.adaptive_max_pool2d(strided_cam, (1, 1)) + 1e-5
         
         strided_cam = (strided_cam - torch.amin(strided_cam, (1, 2), keepdims=True)) / (torch.amax(strided_cam, (1, 2), keepdims=True) - torch.amin(strided_cam, (1, 2), keepdims=True) + 1e-5 )  
-
-
 
         highres_cam = highres_cam[valid_cat]
         # highres_cam /= F.adaptive_max_pool2d(highres_cam, (1, 1)) + 1e-5

@@ -193,6 +193,9 @@ def train(gpu, args):
     model.cuda(gpu)
     model.train()
 
+    # pixel adaptive refine module
+    pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
+
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu],output_device=[gpu], find_unused_parameters=True)
 
     critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
@@ -419,6 +422,8 @@ def train(gpu, args):
                         cam_matrix[batch, class_index,:,:] = cam
                 
                 cam_up_single = cam_matrix[batch,:,:,:]
+
+                cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
                 norm_cam = (cam_up_single - np.min(cam_up_single, (1, 2), keepdims=True)) / \

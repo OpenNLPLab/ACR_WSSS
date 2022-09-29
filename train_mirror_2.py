@@ -17,6 +17,7 @@ from PIL import Image
 from tool import pyutils, imutils, torchutils
 import cv2
 from DPT.mirrorformer import MirrorFormer
+from models import mirrorFormer
 import myTool as mytool
 # from DenseEnergyLoss import DenseEnergyLoss
 # import shutil
@@ -303,8 +304,6 @@ def train(gpu, args):
 
             cls_align_loss = F.l1_loss(attn1_cls, attn2_cls, reduction='mean')
             aff_align_loss = F.l1_loss(attn1_aff, attn2_aff, reduction='mean')
-            # cls_align_loss = F.mse_loss(attn1_cls, attn2_cls, reduction='mean')
-            # aff_align_loss = F.mse_loss(attn1_aff, attn2_aff, reduction='mean')
             # bkg_align_loss = F.l1_loss(attn1_bkg, attn2_bkg, reduction='mean')
 
             # intra_frg_bkg_loss 
@@ -349,8 +348,8 @@ def train(gpu, args):
 
             # intra_frg_bkg_loss = F.l1_loss(comp_map_1, torch.ones_like(comp_map_1)) + F.l1_loss(comp_map_2, torch.ones_like(comp_map_1)) 
 
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x_p_1, label) 
-            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) #+ F.multilabel_soft_margin_loss(x_p_2, label) 
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label) + F.multilabel_soft_margin_loss(x_p_1, label) 
+            cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) + F.multilabel_soft_margin_loss(x_p_2, label) 
 
             # bkg_loss_1 = F.multilabel_soft_margin_loss(x_b_1, bkg_label)
             # bkg_loss_2 = F.multilabel_soft_margin_loss(x_b_2, bkg_label)
@@ -358,7 +357,7 @@ def train(gpu, args):
             # cls_loss_1 = torch.mean(multilabel_categorical_crossentropy(label, x1))
             # cls_loss_2 = torch.mean(multilabel_categorical_crossentropy(label, x2))
 
-            # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item())
+            # print(cls_loss_1.item(), cls_loss_2.item(),cls_align_loss.item(), aff_align_loss.item(), intra_frg_bkg_loss.item())
 
             loss = cls_loss_1 + cls_loss_2 + \
                 cls_align_loss*100 + aff_align_loss*100 \
@@ -412,7 +411,9 @@ def train(gpu, args):
                         one_hot.backward(retain_graph=True)
                         cam, _, _ = model.module.getam(batch, start_layer=6)
 
+                        # print(cam.shape, patch_aff.shape)
                         cam = torch.matmul(patch_aff, cam.unsqueeze(2))
+                        # print(cam.shape)
                         cam = cam.reshape(int(h //16), int(w //16))
 
                         cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (w, h), mode='bilinear', align_corners=True)

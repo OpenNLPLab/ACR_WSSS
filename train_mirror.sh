@@ -1,16 +1,14 @@
-
-
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
 python train_mirror.py \
 --backbone vitb_hybrid \
---session_name mirror_032 \
---lr 0.05 \
+--session_name mirror_035 \
+--lr 0.01 \
 --IMpath /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages \
 --batch_size 1 \
 --crop_size 384 \
 -g 4 \
---max_epoches 15
-
+--max_epoches 15 \
+--address 8888
 
 
 

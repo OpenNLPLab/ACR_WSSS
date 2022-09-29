@@ -2,8 +2,8 @@ import numpy as np
 import torch
 from torch.backends import cudnn
 cudnn.enabled = True
-from torch.utils.data import DataLoader
-from torchvision import transforms
+# from torch.utils.data import DataLoader
+# from torchvision import transforms
 import argparse
 import torch.nn.functional as F
 import os
@@ -24,6 +24,7 @@ import random
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from tool.metrics import Evaluator
+from torch.cuda.amp import autocast as autocast
 
 import visdom
 
@@ -62,7 +63,7 @@ def main():
                         help='DenseCRF sigma_xy')
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
-    parser.add_argument("--crop_size", default=224, type=int)
+    parser.add_argument("--crop_size", default=256, type=int)
     parser.add_argument("--IMpath", default='/home/users/u5876230/coco/train2014/', type=str)
 
     parser.add_argument('-n', '--nodes', default=1,
@@ -169,10 +170,10 @@ def train(gpu, args):
     # print(class_weight_vector)
 
     #loss
-    # critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
-    criterion = SegmentationLosses(weight=None, cuda=True).build_loss(mode='ce')
-    # DenseEnergyLosslayer = DenseEnergyLoss(weight=args.densecrfloss, sigma_rgb=args.sigma_rgb,
-                                    #  sigma_xy=args.sigma_xy, scale_factor=args.rloss_scale)
+    critersion = torch.nn.CrossEntropyLoss(weight=None, ignore_index=255, reduction='elementwise_mean').cuda()
+    # criterion = SegmentationLosses(weight=None, cuda=True).build_loss(mode='ce')
+    DenseEnergyLosslayer = DenseEnergyLoss(weight=args.densecrfloss, sigma_rgb=args.sigma_rgb,
+                                    sigma_xy=args.sigma_xy, scale_factor=args.rloss_scale)
 
     params = model.parameters()
     optimizer = torchutils.PolyOptimizer(params, lr=args.lr, weight_decay=args.wt_dec, max_step=max_step)
@@ -199,7 +200,6 @@ def train(gpu, args):
             # images = F.interpolate(images, size=(int(h * scale), int(w * scale)), mode='bilinear',align_corners=False)
 
             x = model.module.forward_cls(images)
-            # print(x.shape)
             loss = F.multilabel_soft_margin_loss(x, label)
 
             avg_meter.add({'loss': loss.item()})
@@ -259,12 +259,13 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.module.generate_cam_2(batch, start_layer=6)
+                        cam, _, _,_ = model.module.generate_cam_2(batch, start_layer=6)
 
                         cam = cam.reshape(int(h //16), int(w //16))
 
                         cam = F.interpolate(cam.unsqueeze(0).unsqueeze(0), (w, h), mode='bilinear', align_corners=True)
                         cam_matrix[batch, class_index,:,:] = cam
+                        torch.cuda.empty_cache()
                 
                 cam_up_single = cam_matrix[batch,:,:,:]
                 # cam_up_single = cam_up_single/(torch.amax(cam_up_single, (1, 2), keepdim=True) + 1e-5)
@@ -279,11 +280,7 @@ def train(gpu, args):
                 seg_label[batch], saliency_pseudo[batch] = mytool.compute_seg_label_coco(original_img, cur_label.cpu().numpy(), \
                 norm_cam, croppings[:,:,batch], name, iter, saliency_map.data.numpy(),x[batch, :], save_heatmap=True)
                 
-                # print(np.unique(seg_label[batch]))
-
                 # original_img = original_img.transpose(2,0,1).astype(np.uint8)
-
-                # print(original_img.shape, pseudo.shape )
 
                 # pseudo_tmp = pamr((torch.from_numpy(original_img.transpose(2,0,1).astype(np.uint8))).\
                 #     unsqueeze(0).float().cuda(), torch.from_numpy(pseudo).unsqueeze(0).unsqueeze(0).float().cuda()).squeeze(0)
@@ -298,24 +295,26 @@ def train(gpu, args):
                 #             (rgb_pseudo_label * 255).astype('uint8') * 0.5 + original_img * 0.5)
                 
             #########################################################
+            torch.cuda.empty_cache()
             torch.distributed.barrier()
             model.zero_grad()
+            # with autocast():
             x, seg = model(img)
-         
-            # visualize sementation prediction
-            seg_pred = F.interpolate(seg, (w, h), mode='bilinear', align_corners=False)
-            seg_max = torch.max(F.softmax(seg_pred, dim=1), dim=1)
-            seg_max_prob_index = seg_max[1]
-            for batch_index in range(b):
-                original_img = ori_images[batch_index]
-                original_img = original_img.transpose(1,2,0).astype(np.uint8)
-                seg_pred_b = seg_max_prob_index[batch_index]
-                seg_pred_b = decode_segmap(seg_pred_b.cpu().numpy(), dataset="pascal")
-                cv2.imwrite('/home/users/u5876230/ete_project/ete_output/seg_pred/{}_{}.png'.format(name, iter),
-                            (seg_pred_b * 255).astype('uint8')*0.5 + original_img*0.5)
 
-            # celoss, dloss = compute_joint_loss(ori_images, seg, seg_label, croppings, critersion,DenseEnergyLosslayer)
-            celoss = criterion(seg, torch.from_numpy(seg_label).cuda())
+            # visualize sementation prediction
+            # seg_pred = F.interpolate(seg, (w, h), mode='bilinear', align_corners=False)
+            # seg_max = torch.max(F.softmax(seg_pred, dim=1), dim=1)
+            # seg_max_prob_index = seg_max[1]
+            # for batch_index in range(b):
+            #     original_img = ori_images[batch_index]
+            #     original_img = original_img.transpose(1,2,0).astype(np.uint8)
+            #     seg_pred_b = seg_max_prob_index[batch_index]
+            #     seg_pred_b = decode_segmap(seg_pred_b.cpu().numpy(), dataset="pascal")
+            #     cv2.imwrite('/home/users/u5876230/ete_project/ete_output/seg_pred/{}_{}.png'.format(name, iter),
+            #                 (seg_pred_b * 255).astype('uint8')*0.5 + original_img*0.5)
+
+            celoss, dloss = compute_joint_loss(ori_images, seg, seg_label, croppings, critersion,DenseEnergyLosslayer)
+            # celoss = criterion(seg, torch.from_numpy(seg_label).cuda())
             closs = F.multilabel_soft_margin_loss(x, label)
 
             # entropy loss
@@ -352,9 +351,9 @@ def train(gpu, args):
                 # sal_loss = F.binary_cross_entropy(sal_pred.float(), saliency_gt.float(), reduction='none').mean(dim=(1,2))
                 # sal_loss = (((torch.exp(sal_weight)-1)*sal_loss).mean())/b
                 
-                loss = closs + celoss  + sal_loss #+ entropy_loss1 + dloss
+                loss = closs + celoss  + sal_loss + dloss  #+ entropy_loss1 + dloss
             else:
-                loss = closs + celoss  #+ entropy_loss1 + dloss
+                loss = closs + celoss + dloss  #+ entropy_loss1 + dloss
 
             avg_meter.add({'loss': loss.item()})
 

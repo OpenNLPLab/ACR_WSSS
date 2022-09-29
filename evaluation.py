@@ -125,7 +125,7 @@ if __name__ == '__main__':
         writelog(args.logfile, loglist, args.comment)
     else:
         l = []
-        for i in range(60):
+        for i in range(100):
             t = i/100.0
             loglist = do_python_eval(args.predict_dir, args.gt_dir, name_list, 21, args.type, t)
             l.append(loglist['mIoU'])

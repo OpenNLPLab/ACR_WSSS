@@ -25,6 +25,8 @@ from myTool import compute_seg_label_rrm, compute_joint_loss, validation, decode
 import torch.distributed as dist
 # import seaborn as sns
 import matplotlib.pyplot as plt
+import PIL.Image
+
 
 
 
@@ -74,6 +76,8 @@ def main():
     parser.add_argument("--out_ha_crf", default=None, type=str)
     parser.add_argument("--low_alpha", default=1, type=int)
     parser.add_argument("--high_alpha", default=12, type=int)
+    parser.add_argument("--start_layer", default=9, type=int)
+    parser.add_argument("--getam_func", default='cam_grad_s', type=str, choices=['grad', 'grad_s', 'cam_grad_s'])
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=384, type=int)
@@ -112,6 +116,9 @@ def train(gpu, args):
     model.eval()
     model.cuda()
 
+    pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
+
+
     # pixel adaptive refine module
     # pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
 
@@ -133,8 +140,8 @@ def train(gpu, args):
  
     for iter in range(max_step):
         print(iter)
-        if iter > 301:
-            break
+        # if iter > 301:
+            # break
         chunk = data_gen.__next__()
         img_list = chunk
         img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)        
@@ -191,13 +198,12 @@ def train(gpu, args):
             
                         model.zero_grad()
                         one_hot.backward(retain_graph=True)
-                        cam, _, _ = model.getam(0, start_layer=10)
+                        cam, _, _ = model.getam(0, start_layer=args.start_layer, func = args.getam_func)
                         
                         # print(cam.shape, patch_aff.shape)
 
                         # patch aff refine
-                        cam = torch.matmul(patch_aff, cam.unsqueeze(2))
-                        # cam = torch.matmul(cam.unsqueeze(1), patch_aff)
+                        # cam = torch.matmul(patch_aff, cam.unsqueeze(2))
                         # print(cam.shape)
 
                         cam = cam.reshape(int((h*scale) //16), int((w*scale) //16))
@@ -221,9 +227,9 @@ def train(gpu, args):
                 rgb_img = rgb_img.transpose(2,0,1)
 
                 # pamr ---------------------
-                # cam_up_single = pamr((torch.from_numpy(rgb_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
-                # cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
-                # cam_up_single = cam_up_single[0]
+                cam_up_single = pamr((torch.from_numpy(original_img)).unsqueeze(0).float().cuda(), cam_up_single.unsqueeze(0).cuda()).squeeze(0)
+                cam_up_single = F.interpolate(cam_up_single.unsqueeze(0), (W, H), mode='bilinear', align_corners=True)
+                cam_up_single = cam_up_single[0]
                 # --------------------------
 
                 cam_up_single = cam_up_single.cpu().data.numpy()
@@ -251,7 +257,17 @@ def train(gpu, args):
 
         
         norm_cam = (sum_cam - np.min(sum_cam, (1, 2), keepdims=True)) / (np.max(sum_cam, (1, 2), keepdims=True) - np.min(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
-        seg_label[0] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam, name)
+        # seg_label[0] = compute_seg_label_rrm(original_img, cur_label.cpu().numpy(), norm_cam, name)
+        
+        saliency_map_path = os.path.join('/home/users/u5876230/swin_sod/pascal/', '{}.png'.format(name))
+        # saliency_map = PIL.Image.open(saliency_map_path)
+        # saliency_map = np.asarray(saliency_map)
+        saliency_map = cv2.imread(saliency_map_path)[:,:,0]
+        # print(saliency_map.shape)
+        # saliency_map.setflags(write=1)
+        saliency_map[saliency_map>0] = 1
+
+        seg_label[0], _ = compute_seg_label_3(original_img, cur_label.cpu().numpy(), norm_cam,  name, saliency_map, cut_threshold=0.9)
 
         # norm_cam = (sum_cam) / (np.max(sum_cam, (1, 2), keepdims=True) + 1e-5 )  
 
