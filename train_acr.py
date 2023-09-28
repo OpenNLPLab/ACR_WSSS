@@ -1,5 +1,4 @@
 # -*- coding: UTF-8 -*- 
-'CUDA_VISIBLE_DEVICES=4,5,6,7 python train_mirror.py --backbone vitb_hybrid --session_name mirror_015 --lr 0.01 --IMpath /home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages --batch_size 1 --crop_size 384 -g 4'
 import numpy as np
 import torch
 import os
@@ -13,16 +12,8 @@ from tool import pyutils, imutils, torchutils
 import cv2
 from DPT.ACR import ACR
 import myTool as mytool
-from pamr import PAMR
 import torch.multiprocessing as mp
 import torch.distributed as dist
-import matplotlib.pyplot as plt
-from torch.utils.tensorboard import SummaryWriter  
-import visdom
-import shutil
-from myTool import coco_classes
-
-
 
 
 def setup(seed):
@@ -32,7 +23,7 @@ def setup(seed):
     # random.seed(seed)
 
 def validation(model, args):
-    val_list = os.listdir('/home/users/u5876230/coco/val2014/')
+    val_list = mytool.read_file('voc12/val_id.txt')
     data_gen = mytool.chunker(val_list, 1)
     model.eval()
     val_loss_meter = pyutils.AverageMeter('loss')
@@ -43,14 +34,13 @@ def validation(model, args):
         for iter in range(val_step):
             chunk = data_gen.__next__()
             img_list = chunk
-            img, ori_images, label, name_list = mytool.get_data_from_chunk_coco_val(chunk, args)
-            
+            img, ori_images, label, name_list = mytool.get_data_from_chunk_val(chunk, args)
             img = img.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
             x1, _, _ ,_ = model.module.forward_cls(img)
             loss = F.multilabel_soft_margin_loss(x1, label) #+ F.multilabel_soft_margin_loss(x2, label)
             val_loss_meter.add({'loss': loss.item()})
-
+            
     model.train()
     print('loss:', val_loss_meter.pop('loss'))
 
@@ -74,8 +64,8 @@ def main():
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=256, type=int)
-    parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
-    parser.add_argument("--IMpath", default='/home/users/u5876230/coco/train2014/', type=str)
+    parser.add_argument("--voc12_root", default='voc/path', type=str)
+    parser.add_argument("--IMpath", default="voc/image/path", type=str)
 
     parser.add_argument('-n', '--nodes', default=1,
                         type=int, metavar='N')
@@ -86,34 +76,20 @@ def main():
 
     args = parser.parse_args()
 
-    try:
-        shutil.rmtree('tensorboard/{}'.format(args.session_name))
-    except:
-        pass
-    
-    try:
-        os.mkdir('tensorboard/{}'.format(args.session_name))
-    except:
-        pass
-
     ######################################################### set processes
     args.world_size = args.gpus * args.nodes                           #
     os.environ['MASTER_ADDR'] = 'localhost'                            #
-    os.environ['MASTER_PORT'] = args.address                                #
+    os.environ['MASTER_PORT'] = args.address                           #
     mp.spawn(train, nprocs=args.gpus, args=(args,), join=True)         #
     #########################################################
 
 def train(gpu, args):
-    vis = visdom.Visdom()
     rank = args.nr * args.gpus + gpu
     print(rank)
     dist.init_process_group(backend='nccl', init_method='env://', world_size=args.world_size, rank=rank)
     setup(rank)
-
-    if rank==0:
-        writer = SummaryWriter('tensorboard/{}'.format(args.session_name))
     
-    model = ACR(num_classes=80, backbone_name=args.backbone) 
+    model = ACR(num_classes=20, backbone_name=args.backbone) 
 
     torch.cuda.set_device(gpu)
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -128,7 +104,7 @@ def train(gpu, args):
     print(vars(args))
 
     batch_size = args.batch_size
-    img_list = os.listdir('/home/users/u5876230/coco/train2014/')
+    img_list = mytool.read_file(args.LISTpath)
 
     max_step = (len(img_list)//(args.batch_size * args.gpus )) * args.max_epoches
     # lr_step = int(max_step//6)
@@ -151,10 +127,9 @@ def train(gpu, args):
     for iter in range(max_step+1):
         chunk = data_gen.__next__()
         img_list = chunk
-        img, ori_images, label, _, name_list  = mytool.get_data_from_chunk_coco(chunk, args)
+        img, ori_images, label,  name_list = mytool.get_data_from_chunk_v2(chunk, args)
         img = img.cuda(non_blocking=True)
         label = label.cuda(non_blocking=True)
-        # grad = grad.cuda(non_blocking=True)
         b,c,h,w = img.shape
 
         img2 = flipper1(img)
@@ -164,7 +139,6 @@ def train(gpu, args):
             
             attn1, attn2 = attn_list[0], attn_list[1]
             x1, x2 = cls_list[0], cls_list[1]
-            x_p_1, x_p_2 = cls_list[2], cls_list[3]
 
             attn1_cls = attn1[:,:,0,1:].unsqueeze(2)
             attn2_cls = attn2[:,:,0,1:].unsqueeze(2)
@@ -186,12 +160,12 @@ def train(gpu, args):
             cls_align_loss = F.l1_loss(attn1_cls, attn2_cls, reduction='mean')
             aff_align_loss = F.l1_loss(attn1_aff, attn2_aff, reduction='mean')
 
-            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label)
+            cls_loss_1 = F.multilabel_soft_margin_loss(x1, label)  
             cls_loss_2 = F.multilabel_soft_margin_loss(x2, label) 
 
+        
             loss = cls_loss_1 + cls_loss_2 + \
                 cls_align_loss*args.alpha + aff_align_loss*args.alpha 
-                    
             
             avg_meter.add({'loss': loss.item()})
 
@@ -199,11 +173,8 @@ def train(gpu, args):
             loss.backward()
             optimizer.step()
 
-        if (optimizer.global_step-1)%100 == 0 and gpu == 0:
+        if (optimizer.global_step-1)%50 == 0 and gpu == 0:
             cls_loss_list.append(avg_meter.get('loss'))
-            vis.line(cls_loss_list,
-                    win='train_from_init_cls_part_{}_{}'.format(args.session_name, torch.distributed.get_rank()),
-                    opts=dict(title='train_from_init_cls_part_{}_{}'.format(args.session_name, torch.distributed.get_rank())))
 
             timer.update_progress(optimizer.global_step / max_step)
 
@@ -215,7 +186,7 @@ def train(gpu, args):
                 'lr: %.4f' % (optimizer.param_groups[0]['lr']))
         torch.distributed.barrier()
 
-        if (optimizer.global_step+1)%30000 == 0:
+        if (optimizer.global_step+1)%5000 == 0:
             print('validating....')
             torch.distributed.barrier()
             validation(model, args)

@@ -55,7 +55,6 @@ def main():
     parser.add_argument("--backbone", default="vitb_hybrid", type=str)
     parser.add_argument("--address", default="7777", type=str)
 
-
     parser.add_argument('--densecrfloss', type=float, default=1e-7,
                         metavar='M', help='densecrf loss (default: 0)')
     parser.add_argument('--rloss-scale', type=float, default=0.5,
@@ -81,8 +80,8 @@ def main():
 
     parser.add_argument("--session_name", default="vit_cls_seg", type=str)
     parser.add_argument("--crop_size", default=384, type=int)
-    parser.add_argument("--voc12_root", default='/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/', type=str)
-    parser.add_argument("--IMpath", default="/home/users/u5876230/pascal_aug/VOCdevkit/VOC2012/JPEGImages", type=str)
+    parser.add_argument("--voc12_root", default='voc/path', type=str)
+    parser.add_argument("--IMpath", default="voc/image/path", type=str)
 
     parser.add_argument('-n', '--nodes', default=1,
                         type=int, metavar='N')
@@ -112,15 +111,11 @@ def train(gpu, args):
     model.eval()
     model.cuda()
     
-    # pixel adaptive refine module
-    pamr = PAMR(num_iter=10, dilations=[1, 2, 4, 8, 12, 24]).cuda()
-
     flipper1 = transforms.RandomHorizontalFlip(p=1)
     flipper2 = transforms.RandomVerticalFlip(p=1)
     
     print(vars(args))
 
-    # img_list = mytool.read_file('voc12/val_id.txt')
     img_list = mytool.read_file_2(args.LISTpath)
 
     max_step = len(img_list)

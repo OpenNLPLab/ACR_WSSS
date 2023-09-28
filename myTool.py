@@ -1515,7 +1515,6 @@ def get_coco_cls_label(name):
 
 
 def get_data_from_chunk_coco(chunk, args):
-    # print(chunk)
     img_path = args.IMpath
 
     scale = np.random.uniform(0.7, 1.3)
@@ -1563,12 +1562,10 @@ def get_data_from_chunk_coco(chunk, args):
     images = torch.from_numpy(images).float()
     labels = torch.from_numpy(np.array(labels))
 
-
     return images, ori_images, labels, croppings, name_list
 
-
 def get_data_from_chunk_coco_val(chunk, args):
-    img_path = '/home/users/u5876230/coco/val2014/'
+    img_path = args.valpath
 
     scale = np.random.uniform(0.7, 1.3)
 
