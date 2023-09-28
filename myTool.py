@@ -1,6 +1,4 @@
 import numpy as np
-from numpy.lib.function_base import piecewise
-from torch.functional import norm
 import tool.imutils as imutils
 import torch
 import torch.nn.functional as F
@@ -12,7 +10,6 @@ import PIL.Image
 import math
 from torchvision import transforms
 from torch.autograd import Variable
-from canny import CannyFilter
 
 classes = ['aeroplane',
            'bicycle',
@@ -1169,9 +1166,6 @@ def get_data_from_chunk_v2(chunk, args):
     hog_maps = np.zeros((dim, dim, len(chunk)))
     labels = load_image_label_list_from_npy(chunk)
     labels = torch.from_numpy(np.array(labels))
-    # image = cv2.imread("test.jpg",0)
-    # canny_filter = CannyFilter()
-    # P=transforms.Compose([transforms.ToPILImage()])
 
     name_list = []
 
@@ -1180,9 +1174,7 @@ def get_data_from_chunk_v2(chunk, args):
         flip_p = np.random.uniform(0, 1)
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
-        # img_temp = scale_im(img_temp, scale)
         img_temp = RandomResizeLong(img_temp, int(dim*0.9), int(dim/0.875))
-        # img_temp =  cv2.resize(img_temp, (dim, dim))
         img_temp = flip(img_temp, flip_p)
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
@@ -1203,20 +1195,6 @@ def get_data_from_chunk_v2(chunk, args):
     images = images.transpose((3, 2, 0, 1))
     ori_images = ori_images.transpose((3, 2, 0, 1))
     images = torch.from_numpy(images).float()
-    
-    # print(images.shape)
-    # grad = get_gradient(images)
-    # print(images)
-
-    # for high in range(1,10,1):
-    #     for low in range(1,10,1):
-    #         _,_,_,_,_,grad = canny_filter(images, low/10, high/10, False)
-    #         X = P(grad[0])
-    #         X.save('grad/{}_{}_{}.png'.format(name_list[0], low, high))
-    
-    # _,_,_,_,_,grad = canny_filter(images, 0.8, 0.8, False)
-    
-    # print(torch.unique(grad))
 
     return images, ori_images, labels,  name_list
 
@@ -1544,7 +1522,6 @@ def get_data_from_chunk_coco(chunk, args):
 
     dim = args.crop_size
     images = np.zeros((dim, dim, 3, len(chunk)))
-    saliency = np.zeros((dim, dim, len(chunk)))
 
     ori_images = np.zeros((dim, dim, 3, len(chunk)),dtype=np.uint8)
     croppings = np.zeros((dim, dim, len(chunk)))
@@ -1563,19 +1540,14 @@ def get_data_from_chunk_coco(chunk, args):
         flip_p = np.random.uniform(0, 1)
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
-        saliency_map_path = os.path.join('/home/users/u5876230/coco/coco_saliency/coco_saliency/', '{}.png'.format(piece))
-        saliency_map = PIL.Image.open(saliency_map_path)
-        saliency_map = np.asarray(saliency_map)
-        # print(saliency_map.shape)
-        # img_temp = scale_im(img_temp, scale)
-        img_temp, saliency_map = RandomResizeLong2(img_temp, saliency_map, int(dim*0.9), int(dim/0.875))
+        img_temp = RandomResizeLong(img_temp, int(dim*0.9), int(dim/0.875))
 
-        img_temp, saliency_map = flip2(img_temp,saliency_map, flip_p)
+        img_temp = flip(img_temp, flip_p)
 
         img_temp[:, :, 0] = (img_temp[:, :, 0] / 255. - 0.485) / 0.229
         img_temp[:, :, 1] = (img_temp[:, :, 1] / 255. - 0.456) / 0.224
         img_temp[:, :, 2] = (img_temp[:, :, 2] / 255. - 0.406) / 0.225
-        img_temp, cropping, saliency_map = RandomCrop2(img_temp,saliency_map, dim)
+        img_temp, cropping = RandomCrop(img_temp, dim)
 
         ori_temp = np.zeros_like(img_temp)
         ori_temp[:, :, 0] = (img_temp[:, :, 0] * 0.229 + 0.485) * 255.
@@ -1585,21 +1557,17 @@ def get_data_from_chunk_coco(chunk, args):
         croppings[:,:,i] = cropping.astype(np.float32)
 
         images[:, :, :, i] = img_temp
-        saliency[:, :,  i] = saliency_map
 
     images = images.transpose((3, 2, 0, 1))
-    saliency = saliency.transpose((2, 0, 1))
     ori_images = ori_images.transpose((3, 2, 0, 1))
     images = torch.from_numpy(images).float()
-    saliency = torch.from_numpy(saliency).float()
     labels = torch.from_numpy(np.array(labels))
 
 
-    return images, ori_images, labels, croppings, name_list, saliency
+    return images, ori_images, labels, croppings, name_list
 
 
 def get_data_from_chunk_coco_val(chunk, args):
-    # print(chunk)
     img_path = '/home/users/u5876230/coco/val2014/'
 
     scale = np.random.uniform(0.7, 1.3)
@@ -1622,8 +1590,6 @@ def get_data_from_chunk_coco_val(chunk, args):
         labels.append(cls_label)
 
         name_list.append(piece)
-        # print(os.path.join(img_path, piece + '.jpg'))
-        # print(os.path.isfile(os.path.join(img_path, piece + '.jpg')))
         img_temp = cv2.imread(os.path.join(img_path, piece + '.jpg'))
         img_temp = cv2.cvtColor(img_temp,cv2.COLOR_BGR2RGB).astype(np.float)
 
