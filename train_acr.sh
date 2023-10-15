@@ -2,7 +2,7 @@ EXP_NAME=acr_001
 
 mkdir -p ./weight
 
-cp train_mirror.sh weight/$EXP_NAME\.sh
+cp train_acr.sh weight/$EXP_NAME\.sh
 
 # train acr
 CUDA_VISIBLE_DEVICES=4,5,6,7 \
