@@ -1,5 +1,6 @@
 # ACR_WSSS
 [ICCV 2023 Workshop] Official implementation of the paper: [All-pairs Consistency Learning for Weakly Supervised Semantic Segmentation](https://arxiv.org/abs/2308.04321)
+**We won the best paper award of the 1st Workshop on New Ideas in Vision Transformers at ICCV 2023!**
 
 ## Step1: environment
 - clone this repo 
